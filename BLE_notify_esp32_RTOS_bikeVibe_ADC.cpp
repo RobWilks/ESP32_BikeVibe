@@ -32,6 +32,9 @@
    # The Directive defines the thresholds of hand-arm vibration exposure from which the employer has to control
    # (Exposure Action Value, EAV = 2.5 ms^-2 rms) and threshold exposure limits to which workers must not be subjected
    # (Exposure Limit Value, ELV = 5.0 ms^-2 rms)
+   
+   the double precision variables are only needed for the filter calculation; subsequent calculations of stats could be with single precision
+   
 
 */
 
@@ -106,7 +109,6 @@ volatile bool tick = false;
 // reporting
 const uint32_t nMeasureADXL = 1000; // number of ticks before pass to BLE server
 const uint32_t nMeasureADC = 30000; // number of ticks before pass to BLE server
-const double scaleTo8Hrs = time0 / (double)nMeasureADXL / tickPeriod;                    // the reference duration of eight hours (28,800s)
 volatile uint8_t ahvInteger; // exposure data
 volatile uint16_t a8RideInteger; // cumulative exposure data
 volatile uint16_t maxAhvInteger; // max exposure
@@ -133,6 +135,9 @@ TaskHandle_t Task1;
 // pins
 const int ledPin = 12;
 const int adcPin = 13;
+const int signalPin = 14;
+const int gndPin = 27;
+
 
 
 
@@ -291,89 +296,91 @@ void Task1code( void * pvParameters ){
   double a8Ride = 0; // total exposure to vibration since last reset
 
   for (;;) {// wait til tick
-    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
-      uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
-      #if SIMULATE
-      calcAcc(count, (int16_t *)buff);
-      #else
-      adxl.readAcc((int16_t *)buff);
-      #endif //simulate
-      calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
-      if (count < 2) {
-        for (uint8_t j = 0; j < 3; j++) {
-          for (uint8_t k = 1; k < 4; k++) {
-            filteredValues[j][count][k] = filteredValues[j][count][0];
-          }
-        }
-        } else {
-        applyFilter(filterCoeffs, filteredValues, lastValue);
-      }
-      ++count;
-      // calculate rms values and ahvSquared
-      
-      // omit first few readings to allow infinite impulse filter to settle
-      if (count > nOmit)
-      {
-	      double result = 0; // temporary result to allow calculation of maximum ahv
-	      for (uint8_t i = 0; i < 3; i++) {
-		      result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-	      }
-	      sum += result;
-	      // measure max
-	      if (maxAhvSquared < result)
-	      {
-		      maxAhvSquared = result;
-	      }
-	      
-      }
+	  if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+		  digitalWrite(signalPin, HIGH);
+		  uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
+		  #if SIMULATE
+		  calcAcc(count, (int16_t *)buff);
+		  #else
+		  adxl.readAcc((int16_t *)buff);
+		  #endif //simulate
+		  calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
+		  if (count < 2) {
+			  for (uint8_t j = 0; j < 3; j++) {
+				  for (uint8_t k = 1; k < 4; k++) {
+					  filteredValues[j][count][k] = filteredValues[j][count][0];
+				  }
+			  }
+			  } else {
+			  applyFilter(filterCoeffs, filteredValues, lastValue);
+		  }
+		  ++count;
+		  // calculate rms values and ahvSquared
+		  
+		  // omit first few readings to allow infinite impulse filter to settle
+		  if (count > nOmit)
+		  {
+			  double result = 0; // temporary result to allow calculation of maximum ahv
+			  for (uint8_t i = 0; i < 3; i++) {
+				  result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+			  }
+			  sum += result;
+			  // measure max
+			  if (maxAhvSquared < result)
+			  {
+				  maxAhvSquared = result;
+			  }
+			  
+		  }
 
-      if (count > nextCount)
-      {
-	      nextCount = count + nMeasureADXL;
-	      // calculate contribution to daily exposure according to ISO5349
-	      ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-	      sumRide += sum; // sum ahvi^2 for whole ride
-	      a8Ride = sqrtf(sumRide * tickPeriod / time0);
-	      ahvInteger = uint8_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-	      maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-	      a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-	      // the 1000 is to increase no of decimal places reported
-	      // the result is in mm/s/s
-	      newDataADXL = true;
-	      sum = 0;
-	      maxAhvSquared = 0;
-	      #if USE_SER
-	      sprintf(data, "Count = %i, A8 = %e, A8Ride = %e\n", count, ahvRMS, a8Ride);
-	      Serial.print(data);
-	      #endif
-      }
+		  if (count > nextCount)
+		  {
+			  nextCount = count + nMeasureADXL;
+			  // calculate contribution to daily exposure according to ISO5349
+			  ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+			  sumRide += sum; // sum ahvi^2 for whole ride
+			  a8Ride = sqrtf(sumRide * tickPeriod / time0);
+			  ahvInteger = uint8_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+			  maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+			  a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
+			  // the 1000 is to increase no of decimal places reported
+			  // the result is in mm/s/s
+			  newDataADXL = true;
+			  sum = 0;
+			  maxAhvSquared = 0;
+			  #if USE_SER
+			  sprintf(data, "Count = %i, A8 = %e, A8Ride = %e\n", count, ahvRMS, a8Ride);
+			  Serial.print(data);
+			  #endif
+		  }
 
-      if (count > nextADC)
-      {
-        // measure battery voltage
-      // probably need an average
-        batteryVoltage = 0;
-      for (uint16_t i = 0; i < 64; i++ )
-      {
-      batteryVoltage += (uint32_t)readADC();
-      }
-        nextADC = count + nMeasureADC;
-        newDataADC = true;
-		batteryVoltage *= 163L;
-		batteryVoltage >>= 12L;
-		batteryVoltage += 320L;
-		// from calibration
-        #if USE_SER
-        sprintf(data, "Battery = %i V\n", batteryVoltage);
-        Serial.print(data);
-        #endif
-      }
+		  if (count > nextADC)
+		  {
+			  // measure battery voltage
+			  // probably need an average
+			  batteryVoltage = 0;
+			  for (uint16_t i = 0; i < 64; i++ )
+			  {
+				  batteryVoltage += (uint32_t)readADC();
+			  }
+			  nextADC = count + nMeasureADC;
+			  newDataADC = true;
+			  batteryVoltage *= 163L;
+			  batteryVoltage >>= 12L;
+			  batteryVoltage += 320L;
+			  // from calibration
+			  #if USE_SER
+			  sprintf(data, "Battery = %i V\n", batteryVoltage);
+			  Serial.print(data);
+			  #endif
+		  }
 
-	      
-	      
-	      // Could sleep til next tick
+		  
+		  
+		  // Could sleep til next tick
+		  digitalWrite(signalPin, LOW);
 
-    }  // end of main while loop
+	  }  // end of main for loop
   }
 }  // end of task1
 
@@ -403,6 +410,9 @@ void setup(){
   Serial.begin(115200);
   #endif
   pinMode(ledPin, OUTPUT);
+  pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
+  pinMode(gndPin, OUTPUT); //used to measure speed of adxl345 loop
+  digitalWrite(gndPin, LOW); // used as ground for test probe
 
   // Create the BLE Device
   BLEDevice::init("ESP32");
