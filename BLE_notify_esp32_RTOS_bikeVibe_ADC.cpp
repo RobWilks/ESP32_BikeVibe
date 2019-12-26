@@ -71,6 +71,9 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define SENSORS_GRAVITY_SUN               (275.0F)                /**< The sun's gravity in m/s^2 */
 #define SENSORS_GRAVITY_STANDARD          (SENSORS_GRAVITY_EARTH)
 #define TWOPI (2. * PI)
+#define METRES_TO_FEET (3.2808)
+#define RR_CENTIMETRE (100. / 1.024)
+#define RR_MILLIMETRE (1000. / 1.024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
 #define USE_SER 0
@@ -104,8 +107,9 @@ volatile bool tick = false;
 const uint32_t nMeasureADXL = 1000; // number of ticks before pass to BLE server
 const uint32_t nMeasureADC = 30000; // number of ticks before pass to BLE server
 const double scaleTo8Hrs = time0 / (double)nMeasureADXL / tickPeriod;                    // the reference duration of eight hours (28,800s)
-volatile uint16_t a8Integer; // exposure data
+volatile uint8_t ahvInteger; // exposure data
 volatile uint16_t a8RideInteger; // cumulative exposure data
+volatile uint16_t maxAhvInteger; // max exposure
 volatile uint32_t batteryVoltage; // battery voltage measured with ADC (Vin not regulator voltage)
 
 
@@ -281,8 +285,9 @@ void Task1code( void * pvParameters ){
   uint32_t nextADC = nMeasureADC; // determines when data available for BT comm
   uint32_t count = 0;
   double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
+  double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
   double sumRide = 0; // sum since last reset
-  double a8; // exposure if current vibration continues for 8 hours
+  double ahvRMS; // RMS exposure over integration period
   double a8Ride = 0; // total exposure to vibration since last reset
 
   for (;;) {// wait til tick
@@ -309,30 +314,39 @@ void Task1code( void * pvParameters ){
       // omit first few readings to allow infinite impulse filter to settle
       if (count > nOmit)
       {
-        for (uint8_t i = 0; i < 3; i++) {
-          sum += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-        }
-        // could measure max here
-        
+	      double result = 0; // temporary result to allow calculation of maximum ahv
+	      for (uint8_t i = 0; i < 3; i++) {
+		      result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+	      }
+	      sum += result;
+	      // measure max
+	      if (maxAhvSquared < result)
+	      {
+		      maxAhvSquared = result;
+	      }
+	      
       }
 
       if (count > nextCount)
       {
-        nextCount = count + nMeasureADXL;
-        // calculate contribution to daily exposure according to ISO5349
-        a8 = sqrtf(sum * scaleTo8Hrs);
-    sumRide += sum; 
-        a8Ride = sqrtf(sumRide * (double)count  * tickPeriod / time0);
-        a8Integer = uint16_t(a8);
-        a8RideInteger = uint16_t(a8Ride);
-        // Could sleep til next tick
-    newDataADXL = true;
-        sum = 0;
-    #if USE_SER
-        sprintf(data, "Count = %i, A8 = %e, A8Ride = %e\n", count, a8, a8Ride);
-        Serial.print(data);
-    #endif
-     }
+	      nextCount = count + nMeasureADXL;
+	      // calculate contribution to daily exposure according to ISO5349
+	      ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+	      sumRide += sum; // sum ahvi^2 for whole ride
+	      a8Ride = sqrtf(sumRide * tickPeriod / time0);
+	      ahvInteger = uint8_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+	      maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+	      a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
+	      // the 1000 is to increase no of decimal places reported
+	      // the result is in mm/s/s
+	      newDataADXL = true;
+	      sum = 0;
+	      maxAhvSquared = 0;
+	      #if USE_SER
+	      sprintf(data, "Count = %i, A8 = %e, A8Ride = %e\n", count, ahvRMS, a8Ride);
+	      Serial.print(data);
+	      #endif
+      }
 
       if (count > nextADC)
       {
@@ -355,6 +369,9 @@ void Task1code( void * pvParameters ){
         #endif
       }
 
+	      
+	      
+	      // Could sleep til next tick
 
     }  // end of main while loop
   }
@@ -422,7 +439,6 @@ void setup(){
   #if USE_SER
   Serial.println("Waiting a client connection to notify...");
   #endif
-  //dataPacket = 0x0007000c;
 
   
   adxl.powerOn();                     // Power on the ADXL345
@@ -475,30 +491,42 @@ void setup(){
 void loop() {
   // notify changed value
   if (deviceConnected && newDataADXL) {
-    //dataPacket = (dataPacket & 0xffff00ff) | (a8Integer << 8);
-    //pCharacteristic->setValue((uint8_t*)&dataPacket, 4);
-    dataPacket[0] = 0b00001111;
-    dataPacket[1] = a8Integer & 0x00ff;
-    dataPacket[2] = a8Integer >> 8;
-    dataPacket[3] = a8RideInteger & 0x00ff;
-    dataPacket[4] = a8RideInteger >> 8;
-	if (newDataADC)
-	{
-    dataPacket[0] = 0b00011111;	
-    dataPacket[5] = batteryVoltage & 0x00ff;
-    dataPacket[6] = batteryVoltage >> 8;
-	newDataADC = false;
-    pCharacteristic->setValue(dataPacket, 7);	
-	}
-	else
-	{
-    pCharacteristic->setValue(dataPacket, 5);
-	}
-    pCharacteristic->notify();
-    newDataADXL = false;
-  digitalWrite(ledPin, HIGH);
-  delay(100);
-  digitalWrite(ledPin, LOW);
+	  /*
+	  most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
+	  https://www.bluetooth.com/specifications/gatt/characteristics/
+	  send: instantaneous ahvi as one byte in BPM field
+	  cumulative ahvi as two bytes in energy field
+	  two byte instantaneous ahvi in 1st RR field
+	  two byte cumulative ahvi in 2nd RR field
+	  two byte battery voltage in 3rd RR field
+	  */
+	  
+	  dataPacket[0] = 0b00010110;
+	  dataPacket[1] = ahvInteger;
+	  dataPacket[2] = batteryVoltage & 0x00ff;
+	  dataPacket[3] = batteryVoltage >> 8;
+	  dataPacket[4] = a8RideInteger & 0x00ff;
+	  dataPacket[5] = a8RideInteger >> 8;
+	  dataPacket[6] = maxAhvInteger & 0x00ff;
+	  dataPacket[7] = maxAhvInteger >> 8;
+	  //if (newDataADC)
+	  //{
+	  //dataPacket[0] = 0b00011111;
+	  //dataPacket[5] = batteryVoltage & 0x00ff;
+	  //dataPacket[6] = batteryVoltage >> 8;
+	  //newDataADC = false;
+	  //pCharacteristic->setValue(dataPacket, 7);
+	  //}
+	  //else
+	  //{
+	  //pCharacteristic->setValue(dataPacket, 5);
+	  //}
+	  pCharacteristic->setValue(dataPacket, 8);
+	  pCharacteristic->notify();
+	  newDataADXL = false;
+	  digitalWrite(ledPin, HIGH);
+	  delay(100);
+	  digitalWrite(ledPin, LOW);
   }
   // disconnecting
   if (!deviceConnected && oldDeviceConnected) {
