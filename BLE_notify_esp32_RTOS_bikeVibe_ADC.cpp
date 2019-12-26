@@ -35,6 +35,12 @@
    
    the double precision variables are only needed for the filter calculation; subsequent calculations of stats could be with single precision
    
+   scope on testPin shows the core loop occasionally is delayed by 400 microsec but recovers its timing on the next tick
+   
+   no timing data are reported; we use the timestamp from the BLE client.  Could add the timestamp to the RR data packet
+   
+   
+   
 
 */
 
@@ -49,7 +55,6 @@
 
 
 
-#include <Wire.h> // rjw not needed since SPI, not I2C comms
 #include <SparkFun_ADXL345.h>         // SparkFun ADXL345 Library
 
 
@@ -74,12 +79,13 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define SENSORS_GRAVITY_SUN               (275.0F)                /**< The sun's gravity in m/s^2 */
 #define SENSORS_GRAVITY_STANDARD          (SENSORS_GRAVITY_EARTH)
 #define TWOPI (2. * PI)
-#define METRES_TO_FEET (3.2808)
+#define METRES_TO_FEET (3.2808) // not used
 #define RR_CENTIMETRE (100. / 1.024)
 #define RR_MILLIMETRE (1000. / 1.024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
 #define USE_SER 0
+#define TEST_PORT 0 // used to test timing of the core ADXL read loop
 char data[SIZE_BUFF + 1] = {0}; /* Line buffer */
 char temp[SIZE_BUFF + 1] = {0}; /* Temporary buffer */
 
@@ -87,9 +93,16 @@ char temp[SIZE_BUFF + 1] = {0}; /* Temporary buffer */
 #define BUFFER_SIZE 11
 uint8_t buff[BUFFER_SIZE];
 
+// pins
+const int ledPin = 12;
+const int adcPin = 13;
+#if TEST_PORT
+const int signalPin = 14;
+const int gndPin = 27;
+#endif
+
 //initialise vspi with default pins
 //SCLK = 18, MISO = 19, MOSI = 23, SS = 5
-
 const uint32_t spiFrequency = 4000000;
 const uint32_t maxRuns = 100;
 
@@ -131,12 +144,6 @@ uint8_t dataPacket[8] = {0b00001111, 0, 0, 0, 0, 0, 0, 0}; // change type of dat
 TaskHandle_t Task1;
 
 
-
-// pins
-const int ledPin = 12;
-const int adcPin = 13;
-const int signalPin = 14;
-const int gndPin = 27;
 
 
 
@@ -297,7 +304,9 @@ void Task1code( void * pvParameters ){
 
   for (;;) {// wait til tick
 	  if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+		  #if TEST_PORT
 		  digitalWrite(signalPin, HIGH);
+		  #endif
 		  uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
 		  #if SIMULATE
 		  calcAcc(count, (int16_t *)buff);
@@ -338,18 +347,25 @@ void Task1code( void * pvParameters ){
 			  nextCount = count + nMeasureADXL;
 			  // calculate contribution to daily exposure according to ISO5349
 			  ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-			  sumRide += sum; // sum ahvi^2 for whole ride
+			  if (ahvRMS > 0.06)
+			  {
+				  sumRide += sum; // sum ahvi^2 for whole ride
+				  ahvInteger = uint8_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+				  maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+			  }
+			  else // consider the measurement is noise
+			  {
+				  ahvInteger = 0;
+				  maxAhvInteger = 0;
+			  }
 			  a8Ride = sqrtf(sumRide * tickPeriod / time0);
-			  ahvInteger = uint8_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-			  maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
 			  a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-			  // the 1000 is to increase no of decimal places reported
 			  // the result is in mm/s/s
 			  newDataADXL = true;
 			  sum = 0;
 			  maxAhvSquared = 0;
 			  #if USE_SER
-			  sprintf(data, "Count = %i, A8 = %e, A8Ride = %e\n", count, ahvRMS, a8Ride);
+			  sprintf(data, "Count = %i, ahvRMS = %e, a8Ride = %e\n", count, ahvRMS, a8Ride);
 			  Serial.print(data);
 			  #endif
 		  }
@@ -370,7 +386,7 @@ void Task1code( void * pvParameters ){
 			  batteryVoltage += 320L;
 			  // from calibration
 			  #if USE_SER
-			  sprintf(data, "Battery = %i V\n", batteryVoltage);
+			  sprintf(data, "\nBattery = %i V\n", batteryVoltage);
 			  Serial.print(data);
 			  #endif
 		  }
@@ -378,7 +394,9 @@ void Task1code( void * pvParameters ){
 		  
 		  
 		  // Could sleep til next tick
+		  #if TEST_PORT
 		  digitalWrite(signalPin, LOW);
+		  #endif
 
 	  }  // end of main for loop
   }
@@ -394,7 +412,7 @@ void Task1code( void * pvParameters ){
     esp_err_t r = adc2_get_raw( ADC2_CHANNEL_4, ADC_WIDTH_12Bit, &read_raw);
   #if USE_SER
     if ( r == ESP_OK ) {
-      printf("%d\n", read_raw );
+      printf("%d, ", read_raw );
       } else if ( r == ESP_ERR_TIMEOUT ) {
       printf("ADC2 used by Wi-Fi.\n");
     }
@@ -410,9 +428,11 @@ void setup(){
   Serial.begin(115200);
   #endif
   pinMode(ledPin, OUTPUT);
+  #if TEST_PORT
   pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
-  pinMode(gndPin, OUTPUT); //used to measure speed of adxl345 loop
-  digitalWrite(gndPin, LOW); // used as ground for test probe
+  pinMode(gndPin, OUTPUT); //used as ground for test probe
+  digitalWrite(gndPin, LOW); // 
+  #endif
 
   // Create the BLE Device
   BLEDevice::init("ESP32");
