@@ -84,7 +84,7 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1000. / 1.024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
-#define USE_SER 0
+#define USE_SER 1
 #define TEST_PORT 0 // used to test timing of the core ADXL read loop
 char data[SIZE_BUFF + 1] = {0}; /* Line buffer */
 char temp[SIZE_BUFF + 1] = {0}; /* Temporary buffer */
@@ -122,7 +122,7 @@ volatile bool tick = false;
 // reporting
 const uint32_t nMeasureADXL = 1000; // number of ticks before pass to BLE server
 const uint32_t nMeasureADC = 30000; // number of ticks before pass to BLE server
-volatile uint8_t ahvInteger; // exposure data
+volatile uint16_t ahvInteger; // exposure data
 volatile uint16_t a8RideInteger; // cumulative exposure data
 volatile uint16_t maxAhvInteger; // max exposure
 volatile uint32_t batteryVoltage; // battery voltage measured with ADC (Vin not regulator voltage)
@@ -138,7 +138,7 @@ bool oldDeviceConnected = false;
 volatile bool newDataADXL = false;
 volatile bool newDataADC = false;
 //uint32_t dataPacket;
-uint8_t dataPacket[8] = {0b00001111, 0, 0, 0, 0, 0, 0, 0}; // change type of datapacket to allow more bytes to be sent
+uint8_t dataPacket[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // change type of datapacket to allow more bytes to be sent
 
 
 TaskHandle_t Task1;
@@ -350,7 +350,7 @@ void Task1code( void * pvParameters ){
 			  if (ahvRMS > 0.06)
 			  {
 				  sumRide += sum; // sum ahvi^2 for whole ride
-				  ahvInteger = uint8_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+				  ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
 				  maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
 			  }
 			  else // consider the measurement is noise
@@ -420,6 +420,40 @@ void Task1code( void * pvParameters ){
   return(read_raw);
   }
 
+////////////////////////////////////// printPower //////////////////////////////////////////
+void printPower(esp_power_level_t power)
+   {
+	   #if USE_SER
+	   switch (power)   {
+		   case ESP_PWR_LVL_N12:
+		   Serial.println("Power set to N12");
+		   break;
+		   case ESP_PWR_LVL_N9:
+		   Serial.println("Power set to N9");
+		   break;
+		   case ESP_PWR_LVL_N6:
+		   Serial.println("Power set to N6");
+		   break;
+		   case ESP_PWR_LVL_N3:
+		   Serial.println("Power set to N3");
+		   break;
+		   case ESP_PWR_LVL_N0:
+		   Serial.println("Power set to N0");
+		   break;
+		   case ESP_PWR_LVL_P3:
+		   Serial.println("Power set to P3");
+		   break;
+		   case ESP_PWR_LVL_P6:
+		   Serial.println("Power set to P6");
+		   break;
+		   case ESP_PWR_LVL_P9:
+		   Serial.println("Power set to P9");
+		   break;
+		   default:
+		   Serial.println("default");
+	   }
+	   #endif
+   }
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 
@@ -433,6 +467,14 @@ void setup(){
   pinMode(gndPin, OUTPUT); //used as ground for test probe
   digitalWrite(gndPin, LOW); // 
   #endif
+  
+  // Set the CPU speed
+  setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
+  #if USE_SER
+  Serial.print( getCpuFrequencyMhz();
+  #endif
+
+  
 
   // Create the BLE Device
   BLEDevice::init("ESP32");
@@ -466,11 +508,33 @@ void setup(){
   pAdvertising->setScanResponse(false);
   pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
   BLEDevice::startAdvertising();
+  delay(5000); // added by rjw so as to start serial client
   #if USE_SER
   Serial.println("Waiting a client connection to notify...");
   #endif
 
-  
+//set advertising power   
+   /*
+    The power level can be one of:
+    ESP_PWR_LVL_N14
+    ESP_PWR_LVL_N11
+    ESP_PWR_LVL_N8
+    ESP_PWR_LVL_N5
+    ESP_PWR_LVL_N2
+    ESP_PWR_LVL_P1
+    ESP_PWR_LVL_P4
+    ESP_PWR_LVL_P7
+*/
+   if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
+   {
+	   #if USE_SER
+	   Serial.println("Advertising power changed");
+	   #endif
+   }
+   esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+   printPower(powerAdv);
+   
+ 
   adxl.powerOn();                     // Power on the ADXL345
 
   adxl.setRangeSetting(16);           // Give the range settings
@@ -531,27 +595,19 @@ void loop() {
 	  two byte battery voltage in 3rd RR field
 	  */
 	  
-	  dataPacket[0] = 0b00010110;
-	  dataPacket[1] = ahvInteger;
-	  dataPacket[2] = batteryVoltage & 0x00ff;
-	  dataPacket[3] = batteryVoltage >> 8;
-	  dataPacket[4] = a8RideInteger & 0x00ff;
-	  dataPacket[5] = a8RideInteger >> 8;
-	  dataPacket[6] = maxAhvInteger & 0x00ff;
-	  dataPacket[7] = maxAhvInteger >> 8;
-	  //if (newDataADC)
-	  //{
-	  //dataPacket[0] = 0b00011111;
-	  //dataPacket[5] = batteryVoltage & 0x00ff;
-	  //dataPacket[6] = batteryVoltage >> 8;
-	  //newDataADC = false;
-	  //pCharacteristic->setValue(dataPacket, 7);
-	  //}
-	  //else
-	  //{
-	  //pCharacteristic->setValue(dataPacket, 5);
-	  //}
-	  pCharacteristic->setValue(dataPacket, 8);
+	  dataPacket[0] = 0b00010111;
+	  dataPacket[1] = ahvInteger & 0x00ff;
+	  dataPacket[2] = ahvInteger >> 8;
+	  dataPacket[3] = batteryVoltage & 0x00ff;
+	  dataPacket[4] = batteryVoltage >> 8;
+	  dataPacket[5] = a8RideInteger & 0x00ff;
+	  dataPacket[6] = a8RideInteger >> 8;
+	  dataPacket[7] = maxAhvInteger & 0x00ff;
+	  dataPacket[8] = maxAhvInteger >> 8;
+	  dataPacket[9] = ahvInteger & 0x00ff;
+	  dataPacket[10] = ahvInteger >> 8;
+
+	  pCharacteristic->setValue(dataPacket, 11);
 	  pCharacteristic->notify();
 	  newDataADXL = false;
 	  digitalWrite(ledPin, HIGH);
@@ -569,10 +625,21 @@ void loop() {
   }
   // connecting
   if (deviceConnected && !oldDeviceConnected) {
-    // do stuff here on connecting
-  #if USE_SER
-    Serial.println("connected");
-  #endif
-    oldDeviceConnected = deviceConnected;
+	  // do stuff here on connecting
+	  
+	  if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
+	  {
+		  #if USE_SER
+		  Serial.println("Connecting power changed");
+		  #endif
+	  }
+	  esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
+	  printPower(powerConn);
+
+	  
+	  #if USE_SER
+	  Serial.println("connected");
+	  #endif
+	  oldDeviceConnected = deviceConnected;
   }
 }
