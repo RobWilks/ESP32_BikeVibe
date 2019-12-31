@@ -457,60 +457,7 @@ void printPower(esp_power_level_t power)
    }
 
 
-////////////////////////////////////// setTimeInact //////////////////////////////////////////
 
-
-void setTimeInact(int timeInactive) {
-	timeInactive = constrain(timeInactive,0,255);
-	byte _b = byte (timeInactive);
-	writeTo(ADXL345_TIME_INACT, _b);
-
-}
-////////////////////////////////////// sleepADXL //////////////////////////////////////////
-
-
-void sleepADXL() {
-	//D7 D6 D5		D4			D3			D2		D1		D0
-	//0  0  Link	AUTO_SLEEP	Measure		Sleep	Wakeup
-	byte _b;
-	readFrom(ADXL345_POWER_CTL, 1, &_b);
-	_b |= b00000100;
-	writeTo(ADXL345_POWER_CTL, _b);
-}
-
-////////////////////////////////////// powerUpADXL //////////////////////////////////////////
-
-
-void powerUpADXL() {
-	//D7 D6 D5		D4			D3			D2		D1		D0
-	//0  0  Link	AUTO_SLEEP	Measure		Sleep	Wakeup
-	writeTo(ADXL345_POWER_CTL, 8);	// Measure
-}
-
-////////////////////////////////////// standByADXL //////////////////////////////////////////
-
-
-void standByADXL() {
-	//D7 D6 D5		D4			D3			D2		D1		D0
-	//0  0  Link	AUTO_SLEEP	Measure		Sleep	Wakeup
-	writeTo(ADXL345_POWER_CTL, 0);	// Measure
-}
-
-////////////////////////////////////// setActivityAC //////////////////////////////////////////
-
-
-void setActivityAC(bool state) { 
-	/*
-	state = 0 is DC; 1 is AC
-	In ac-coupled operation for activity detection, the acceleration
-	value at the start of activity detection is taken as a reference
-	value. New samples of acceleration are then compared to this
-	reference value, and if the magnitude of the difference exceeds
-	the THRESH_ACT value, the device triggers an activity interrupt.
-	*/
-	
-	setRegisterBit(ADXL345_ACT_INACT_CTL, 7, state);
-}
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 
@@ -622,14 +569,14 @@ void setup(){
   
   adxl.setActivityXYZ(1, 1, 1);						// Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
   adxl.setActivityThreshold(16);					// 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
-  setActivityAC(1);
+  adxl.setActivityAC(1);
   adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
   // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
   // This library may have a problem using INT2 pin. Default to INT1 pin.
   adxl.ActivityINT(1);
   Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
   
-  sleepADXL();
+  adxl.sleep();
 
   
   #if USE_SER
@@ -638,19 +585,26 @@ void setup(){
   
   
   
-  while(digitalRead(accelerometerInt1Pin)) {;;} // do nothing
+  while(!digitalRead(accelerometerInt1Pin)) {;;} // wait until Int1 is high
   
   byte intSource = adxl.getInterruptSource();
   Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
 
   #if USE_SER
-  Serial.print("intSource = "); Serial.println(byte, BIN);
+  /*
+  D7			D6			D5			D4
+  DATA_READY	SINGLE_TAP  DOUBLE_TAP  Activity
+  D3			D2			D1			D0
+  Inactivity	FREE_FALL	Watermark	Overrun
+  */
+  Serial.print("intSource = "); Serial.println(intSource, BIN);
+  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
   Serial.print("accelerometerInt1Pin = "); Serial.println(digitalRead(accelerometerInt1Pin));
   #endif
   
   // enable measurement, toggle from 0 to 1
-  standByADXL();
-  powerUpADXL();
+  adxl.standBy();
+  adxl.powerUp();
 	  
   while(1) {;;} // stop here
 
