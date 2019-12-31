@@ -496,7 +496,7 @@ void standByADXL() {
 	writeTo(ADXL345_POWER_CTL, 0);	// Measure
 }
 
-////////////////////////////////////// standByADXL //////////////////////////////////////////
+////////////////////////////////////// setActivityAC //////////////////////////////////////////
 
 
 void setActivityAC(bool state) { 
@@ -620,13 +620,15 @@ void setup(){
 
   
   
-  adxl.setActivityXYZ(1, 1, 1);       // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-  adxl.setActivityThreshold(16);      // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+  adxl.setActivityXYZ(1, 1, 1);						// Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setActivityThreshold(16);					// 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
   setActivityAC(1);
-  adxl.setImportantInterruptMapping(0, 0, 0, 1, 0);     // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
+  adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
   // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
   // This library may have a problem using INT2 pin. Default to INT1 pin.
   adxl.ActivityINT(1);
+  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
+  
   sleepADXL();
 
   
@@ -634,20 +636,23 @@ void setup(){
   Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
   #endif
   
+  
+  
   while(digitalRead(accelerometerInt1Pin)) {;;} // do nothing
   
   byte intSource = adxl.getInterruptSource();
+  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
 
   #if USE_SER
   Serial.print("intSource = "); Serial.println(byte, BIN);
   Serial.print("accelerometerInt1Pin = "); Serial.println(digitalRead(accelerometerInt1Pin));
   #endif
   
-  // enable measurement
+  // enable measurement, toggle from 0 to 1
   standByADXL();
   powerUpADXL();
 	  
-  
+  while(1) {;;} // stop here
 
 
 
