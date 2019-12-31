@@ -86,6 +86,15 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define SIZE_BUFF 49
 #define USE_SER 1
 #define TEST_PORT 0 // used to test timing of the core ADXL read loop
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  5        /* Time ESP32 will go to sleep (in seconds) */
+
+RTC_DATA_ATTR int bootCount = 0;
+
+
+
+
+
 char data[SIZE_BUFF + 1] = {0}; /* Line buffer */
 char temp[SIZE_BUFF + 1] = {0}; /* Temporary buffer */
 
@@ -284,8 +293,6 @@ void calcAcc(uint32_t dataCount, int16_t * buff )
   buff[2] = x;
 }
 
-
-
 ////////////////////////////////////// Task1code //////////////////////////////////////////
 
 
@@ -456,6 +463,27 @@ void printPower(esp_power_level_t power)
      #endif
    }
 
+////////////////////////////////////// print_wakeup_reason //////////////////////////////////////////
+/*
+Method to print the reason by which ESP32
+has been awaken from sleep
+*/
+void print_wakeup_reason(){
+  esp_sleep_wakeup_cause_t wakeup_reason;
+
+  wakeup_reason = esp_sleep_get_wakeup_cause();
+
+  switch(wakeup_reason)
+  {
+    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
+    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
+    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
+    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
+    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+  }
+}
+
 
 
 ////////////////////////////////////// setup //////////////////////////////////////////
@@ -472,15 +500,26 @@ void setup(){
   pinMode(accelerometerInt1Pin, INPUT); //used to check for accelerometer wake-up
   digitalWrite(gndPin, LOW); // 
   #endif
+
+
+
+
+  
   delay(5000);
   
   // Set the CPU speed
   setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
   #if USE_SER
-  Serial.println(getCpuFrequencyMhz());
+  Serial.print(CPU frequency = "); Serial.println(getCpuFrequencyMhz());
   #endif
 
   
+  //Increment boot number and print it every reboot
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
+
+  //Print the wakeup reason for ESP32
+  print_wakeup_reason();
 
   // Create the BLE Device
   BLEDevice::init("ESP32");
@@ -541,7 +580,6 @@ void setup(){
    printPower(powerAdv);
    
  
-  adxl.powerOn();                     // Power on the ADXL345
 
   adxl.setRangeSetting(16);           // Give the range settings
   // Accepted values are 2g, 4g, 8g or 16g
@@ -567,8 +605,8 @@ void setup(){
 
   
   
-  adxl.setActivityXYZ(1, 1, 1);						// Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-  adxl.setActivityThreshold(16);					// 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+  adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
   adxl.setActivityAC(1);
   adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
   // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
@@ -585,29 +623,64 @@ void setup(){
   
   
   
-  while(!digitalRead(accelerometerInt1Pin)) {;;} // wait until Int1 is high
+  while(!(digitalRead(accelerometerInt1Pin))) {delayMicroseconds(50);} // wait until Int1 is high
+  Serial.print("accelerometerInt1Pin = "); Serial.println(digitalRead(accelerometerInt1Pin)); 
+
   
   byte intSource = adxl.getInterruptSource();
+  Serial.print("accelerometerInt1Pin = "); Serial.println(digitalRead(accelerometerInt1Pin));
+  Serial.print("intSource = "); Serial.println(intSource, BIN);
+
+  
+  adxl.ActivityINT(0);
   Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
 
-  #if USE_SER
-  /*
-  D7			D6			D5			D4
-  DATA_READY	SINGLE_TAP  DOUBLE_TAP  Activity
-  D3			D2			D1			D0
-  Inactivity	FREE_FALL	Watermark	Overrun
-  */
+  intSource = adxl.getInterruptSource();
   Serial.print("intSource = "); Serial.println(intSource, BIN);
-  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
-  Serial.print("accelerometerInt1Pin = "); Serial.println(digitalRead(accelerometerInt1Pin));
-  #endif
+
+   /*
+  D7      D6      D5      D4
+  DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
+  D3      D2      D1      D0
+  Inactivity  FREE_FALL Watermark Overrun
+  */
   
   // enable measurement, toggle from 0 to 1
   adxl.standBy();
   adxl.powerUp();
-	  
-  while(1) {;;} // stop here
+    
+ /*
+  First we configure the wake up source
+  We set our ESP32 to wake up every 5 seconds
+  */
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  Serial.println("Setup ESP32 to sleep for every " + String(TIME_TO_SLEEP) +
+  " Seconds");
 
+  /*
+  Next we decide what all peripherals to shut down/keep on
+  By default, ESP32 will automatically power down the peripherals
+  not needed by the wakeup source, but if you want to be a poweruser
+  this is for you. Read in detail at the API docs
+  http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
+  Left the line commented as an example of how to configure peripherals.
+  The line below turns off all RTC peripherals in deep sleep.
+  */
+  //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+  //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
+
+  /*
+  Now that we have setup a wake cause and if needed setup the
+  peripherals state in deep sleep, we can now start going to
+  deep sleep.
+  In the case that no wake up sources were provided but deep
+  sleep was started, it will sleep forever unless hardware
+  reset occurs.
+  */
+  Serial.println("Going to sleep now");
+  Serial.flush(); 
+  esp_deep_sleep_start();
+  Serial.println("This will never be printed");
 
 
   
