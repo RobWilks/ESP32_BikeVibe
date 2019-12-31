@@ -364,13 +364,13 @@ void Task1code( void * pvParameters ){
           sumRide += sum; // sum ahvi^2 for whole ride
           ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
           maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-		  lastTimeNonZero = count;
+      lastTimeNonZero = count;
         }
         else // consider the measurement is noise
         {
           ahvInteger = 0;
           maxAhvInteger = 0;
-		  if ((count - lastTimeNonZero) > timeBeforeSleep) enterDeepSleep();
+      //if ((count - lastTimeNonZero) > timeBeforeSleep) enterDeepSleep();
         }
         a8Ride = sqrtf(sumRide * tickPeriod / time0);
         a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
@@ -493,202 +493,201 @@ void print_wakeup_reason(){
 
 void enterDeepSleep()
 {
-	adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-	  adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
-	  adxl.setActivityAC(1);
-	  adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
-	  // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
-	  // This library may have a problem using INT2 pin. Default to INT1 pin.
-	  adxl.ActivityINT(1);
-	  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
-	  
-	  adxl.sleep();
-	
-	  
-	  #if USE_SER
-	  Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
-	  #endif
-	  
-	  
-	  /*
-	  configure the wake up source as RTC GPIO 10; connect INT1 from ADXL345 to this pin
-	  We set our ESP32 to wake up every 5 seconds
-	  */
-	  esp_sleep_enable_ext0_wakeup(GPIO_NUM_10,1); //1 = High, 0 = Low
+  adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+    adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+    adxl.setActivityAC(1);
+    adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
+    // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
+    // This library may have a problem using INT2 pin. Default to INT1 pin.
+    adxl.ActivityINT(1);
+    Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
+    
+    adxl.sleep();
+  
+    
+    #if USE_SER
+    Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
+    #endif
+    
+    
+    /*
+    configure the wake up source as RTC GPIO 10; connect INT1 from ADXL345 to this pin
+    */
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_10,1); //1 = High, 0 = Low
 
-	  
-	  /*
-	  Next we decide what all peripherals to shut down/keep on
-	  By default, ESP32 will automatically power down the peripherals
-	  not needed by the wakeup source, but if you want to be a poweruser
-	  this is for you. Read in detail at the API docs
-	  http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
-	  Left the line commented as an example of how to configure peripherals.
-	  The line below turns off all RTC peripherals in deep sleep.
-	  */
-	  //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
-	  //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
-	  
-	  /*
-	  Now that we have setup a wake cause and if needed setup the
-	  peripherals state in deep sleep, we can now start going to
-	  deep sleep.
-	  In the case that no wake up sources were provided but deep
-	  sleep was started, it will sleep forever unless hardware
-	  reset occurs.
-	  */
-	  #if USE_SER
-	  Serial.println("Going to sleep now");
-	  Serial.flush(); 
-	  #endif
-	  esp_deep_sleep_start();
+    
+    /*
+    Next we decide what all peripherals to shut down/keep on
+    By default, ESP32 will automatically power down the peripherals
+    not needed by the wakeup source, but if you want to be a poweruser
+    this is for you. Read in detail at the API docs
+    http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
+    Left the line commented as an example of how to configure peripherals.
+    The line below turns off all RTC peripherals in deep sleep.
+    */
+    //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+    //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
+    
+    /*
+    Now that we have setup a wake cause and if needed setup the
+    peripherals state in deep sleep, we can now start going to
+    deep sleep.
+    In the case that no wake up sources were provided but deep
+    sleep was started, it will sleep forever unless hardware
+    reset occurs.
+    */
+    #if USE_SER
+    Serial.println("Going to sleep now");
+    Serial.flush(); 
+    #endif
+    //esp_deep_sleep_start();
 }
 
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 
 void setup(){
-	#if USE_SER
-	Serial.begin(115200);
-	#endif
-	pinMode(ledPin, OUTPUT);
-	#if TEST_PORT
-	pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
-	pinMode(gndPin, OUTPUT); //used as ground for test probe
-	digitalWrite(gndPin, LOW); //
-	#endif
-	delay(5000);
-	
-	// Set the CPU speed
-	setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
-	#if USE_SER
-	Serial.print(CPU frequency = "); Serial.println(getCpuFrequencyMhz());
-	#endif
+  #if USE_SER
+  Serial.begin(115200);
+  #endif
+  pinMode(ledPin, OUTPUT);
+  #if TEST_PORT
+  pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
+  pinMode(gndPin, OUTPUT); //used as ground for test probe
+  digitalWrite(gndPin, LOW); //
+  #endif
+  delay(5000);
+  
+  // Set the CPU speed
+  setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
+  #if USE_SER
+  Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
+  #endif
 
-	
-	//Increment boot number and print it every reboot
-	++bootCount;
-	Serial.println("Boot number: " + String(bootCount));
+  
+  //Increment boot number and print it every reboot
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
 
-	//Print the wakeup reason for ESP32
-	print_wakeup_reason();
+  //Print the wakeup reason for ESP32
+  print_wakeup_reason();
 
-	// Create the BLE Device
-	BLEDevice::init("ESP32");
+  // Create the BLE Device
+  BLEDevice::init("ESP32");
 
-	// Create the BLE Server
-	pServer = BLEDevice::createServer();
-	pServer->setCallbacks(new MyServerCallbacks());
+  // Create the BLE Server
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
 
-	// Create the BLE Service
-	BLEService *pService = pServer->createService(SERVICE_UUID);
+  // Create the BLE Service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
 
-	// Create a BLE Characteristic
-	pCharacteristic = pService->createCharacteristic(
-	CHARACTERISTIC_UUID,
-	BLECharacteristic::PROPERTY_READ   |
-	BLECharacteristic::PROPERTY_WRITE  |
-	BLECharacteristic::PROPERTY_NOTIFY |
-	BLECharacteristic::PROPERTY_INDICATE
-	);
+  // Create a BLE Characteristic
+  pCharacteristic = pService->createCharacteristic(
+  CHARACTERISTIC_UUID,
+  BLECharacteristic::PROPERTY_READ   |
+  BLECharacteristic::PROPERTY_WRITE  |
+  BLECharacteristic::PROPERTY_NOTIFY |
+  BLECharacteristic::PROPERTY_INDICATE
+  );
 
-	// https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
-	// Create a BLE Descriptor
-	pCharacteristic->addDescriptor(new BLE2902());
+  // https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
+  // Create a BLE Descriptor
+  pCharacteristic->addDescriptor(new BLE2902());
 
-	// Start the service
-	pService->start();
+  // Start the service
+  pService->start();
 
-	// Start advertising
-	BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-	pAdvertising->addServiceUUID(SERVICE_UUID);
-	pAdvertising->setScanResponse(false);
-	pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
-	BLEDevice::startAdvertising();
-	delay(5000); // added by rjw so as to start serial client
-	#if USE_SER
-	Serial.println("Waiting a client connection to notify...");
-	#endif
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+  BLEDevice::startAdvertising();
+  delay(5000); // added by rjw so as to start serial client
+  #if USE_SER
+  Serial.println("Waiting a client connection to notify...");
+  #endif
 
-	//set advertising power
-	/*
-	The power level can be one of:
-	ESP_PWR_LVL_N12
-	ESP_PWR_LVL_N9
-	ESP_PWR_LVL_N6
-	ESP_PWR_LVL_N3
-	ESP_PWR_LVL_N0
-	ESP_PWR_LVL_P3
-	ESP_PWR_LVL_P6
-	ESP_PWR_LVL_P9
-	*/
-	if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
-	{
-		#if USE_SER
-		Serial.println("Advertising power changed");
-		#endif
-	}
-	esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
-	printPower(powerAdv);
-	
-	// configure accelerometer
+  //set advertising power
+  /*
+  The power level can be one of:
+  ESP_PWR_LVL_N12
+  ESP_PWR_LVL_N9
+  ESP_PWR_LVL_N6
+  ESP_PWR_LVL_N3
+  ESP_PWR_LVL_N0
+  ESP_PWR_LVL_P3
+  ESP_PWR_LVL_P6
+  ESP_PWR_LVL_P9
+  */
+  if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
+  {
+    #if USE_SER
+    Serial.println("Advertising power changed");
+    #endif
+  }
+  esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+  printPower(powerAdv);
+  
+  // configure accelerometer
 
-	adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
-	byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
-	#if USE_SER
-	Serial.print("intSource = "); Serial.println(intSource, BIN);
-	/*
-	D7      D6      D5      D4
-	DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
-	D3      D2      D1      D0
-	Inactivity  FREE_FALL Watermark Overrun
-	*/
-	#endif
-	adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
-	adxl.powerUp();
+  adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
+  byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
+  #if USE_SER
+  Serial.print("intSource = "); Serial.println(intSource, BIN);
+  /*
+  D7      D6      D5      D4
+  DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
+  D3      D2      D1      D0
+  Inactivity  FREE_FALL Watermark Overrun
+  */
+  #endif
+  adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
+  adxl.powerUp();
 
-	adxl.setRangeSetting(16);           // Give the range settings
-	// Accepted values are 2g, 4g, 8g or 16g
-	// Higher Values = Wider Measurement Range
-	// Lower Values = Greater Sensitivity
+  adxl.setRangeSetting(16);           // Give the range settings
+  // Accepted values are 2g, 4g, 8g or 16g
+  // Higher Values = Wider Measurement Range
+  // Lower Values = Greater Sensitivity
 
-	adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
+  adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
 
-	adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
-	
-	adxl.setRate(1600);
+  adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
+  
+  adxl.setRate(1600);
 
-	adxl.getRangeSetting(buff);
-	
-	initTime(1000000L / tickFrequency); // Configure timer
-	
-	#if USE_SER
-	Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
-	Serial.print("Data rate ");  Serial.println(adxl.getRate());
-	Serial.print("Range ");  Serial.println(buff[0]);
-	Serial.println("Initialised accelerometer");
-	#endif
+  adxl.getRangeSetting(buff);
+  
+  initTime(1000000L / tickFrequency); // Configure timer
+  
+  #if USE_SER
+  Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
+  Serial.print("Data rate ");  Serial.println(adxl.getRate());
+  Serial.print("Range ");  Serial.println(buff[0]);
+  Serial.println("Initialised accelerometer");
+  #endif
 
-	
-	
-	delay (1000);
-	
-	disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
-	// see epic thread https://github.com/espressif/arduino-esp32/issues/595
-	
-	//create a task that will be executed in the Task1code() function, with priority 2 and executed on core 0
-	xTaskCreatePinnedToCore(
-	Task1code,   /* Task function. */
-	"Task1",     /* name of task. */
-	10000,       /* Stack size of task */
-	NULL,        /* parameter of the task */
-	2,           /* priority of the task */
-	&Task1,      /* Task handle to keep track of created task */
-	0);          /* pin task to core 0 */
-	delay(1000);
-	
+  
+  
+  delay (1000);
+  
+  disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
+  // see epic thread https://github.com/espressif/arduino-esp32/issues/595
+  
+  //create a task that will be executed in the Task1code() function, with priority 2 and executed on core 0
+  xTaskCreatePinnedToCore(
+  Task1code,   /* Task function. */
+  "Task1",     /* name of task. */
+  10000,       /* Stack size of task */
+  NULL,        /* parameter of the task */
+  2,           /* priority of the task */
+  &Task1,      /* Task handle to keep track of created task */
+  0);          /* pin task to core 0 */
+  delay(1000);
+  
 
-	
+  
 }
 
 
