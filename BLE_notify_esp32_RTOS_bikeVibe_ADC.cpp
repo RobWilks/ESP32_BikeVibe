@@ -1,4 +1,4 @@
-﻿/*
+/*
     Video: https://www.youtube.com/watch?v=oCMOYS71NIU
     Based on Neil Kolban example for IDF: https://github.com/nkolban/esp32-snippets/blob/master/cpp_utils/tests/BLE%20Tests/SampleNotify.cpp
     Ported to Arduino ESP32 by Evandro Copercini
@@ -96,6 +96,7 @@ uint8_t buff[BUFFER_SIZE];
 // pins
 const int ledPin = 12;
 const int adcPin = 13;
+const int accelerometerInt1Pin = 4;
 #if TEST_PORT
 const int signalPin = 14;
 const int gndPin = 27;
@@ -303,102 +304,102 @@ void Task1code( void * pvParameters ){
   double a8Ride = 0; // total exposure to vibration since last reset
 
   for (;;) {// wait til tick
-	  if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
-		  #if TEST_PORT
-		  digitalWrite(signalPin, HIGH);
-		  #endif
-		  uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
-		  #if SIMULATE
-		  calcAcc(count, (int16_t *)buff);
-		  #else
-		  adxl.readAcc((int16_t *)buff);
-		  #endif //simulate
-		  calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
-		  if (count < 2) {
-			  for (uint8_t j = 0; j < 3; j++) {
-				  for (uint8_t k = 1; k < 4; k++) {
-					  filteredValues[j][count][k] = filteredValues[j][count][0];
-				  }
-			  }
-			  } else {
-			  applyFilter(filterCoeffs, filteredValues, lastValue);
-		  }
-		  ++count;
-		  // calculate rms values and ahvSquared
-		  
-		  // omit first few readings to allow infinite impulse filter to settle
-		  if (count > nOmit)
-		  {
-			  double result = 0; // temporary result to allow calculation of maximum ahv
-			  for (uint8_t i = 0; i < 3; i++) {
-				  result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-			  }
-			  sum += result;
-			  // measure max
-			  if (maxAhvSquared < result)
-			  {
-				  maxAhvSquared = result;
-			  }
-			  
-		  }
+    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+      #if TEST_PORT
+      digitalWrite(signalPin, HIGH);
+      #endif
+      uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
+      #if SIMULATE
+      calcAcc(count, (int16_t *)buff);
+      #else
+      adxl.readAcc((int16_t *)buff);
+      #endif //simulate
+      calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
+      if (count < 2) {
+        for (uint8_t j = 0; j < 3; j++) {
+          for (uint8_t k = 1; k < 4; k++) {
+            filteredValues[j][count][k] = filteredValues[j][count][0];
+          }
+        }
+        } else {
+        applyFilter(filterCoeffs, filteredValues, lastValue);
+      }
+      ++count;
+      // calculate rms values and ahvSquared
+      
+      // omit first few readings to allow infinite impulse filter to settle
+      if (count > nOmit)
+      {
+        double result = 0; // temporary result to allow calculation of maximum ahv
+        for (uint8_t i = 0; i < 3; i++) {
+          result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+        }
+        sum += result;
+        // measure max
+        if (maxAhvSquared < result)
+        {
+          maxAhvSquared = result;
+        }
+        
+      }
 
-		  if (count > nextCount)
-		  {
-			  nextCount = count + nMeasureADXL;
-			  // calculate contribution to daily exposure according to ISO5349
-			  ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-			  if (ahvRMS > 0.06)
-			  {
-				  sumRide += sum; // sum ahvi^2 for whole ride
-				  ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-				  maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-			  }
-			  else // consider the measurement is noise
-			  {
-				  ahvInteger = 0;
-				  maxAhvInteger = 0;
-			  }
-			  a8Ride = sqrtf(sumRide * tickPeriod / time0);
-			  a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-			  // the result is in mm/s/s
-			  newDataADXL = true;
-			  sum = 0;
-			  maxAhvSquared = 0;
-			  #if USE_SER
-			  sprintf(data, "Count = %i, ahvRMS = %e, a8Ride = %e\n", count, ahvRMS, a8Ride);
-			  Serial.print(data);
-			  #endif
-		  }
+      if (count > nextCount)
+      {
+        nextCount = count + nMeasureADXL;
+        // calculate contribution to daily exposure according to ISO5349
+        ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+        if (ahvRMS > 0.06)
+        {
+          sumRide += sum; // sum ahvi^2 for whole ride
+          ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+          maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+        }
+        else // consider the measurement is noise
+        {
+          ahvInteger = 0;
+          maxAhvInteger = 0;
+        }
+        a8Ride = sqrtf(sumRide * tickPeriod / time0);
+        a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
+        // the result is in mm/s/s
+        newDataADXL = true;
+        sum = 0;
+        maxAhvSquared = 0;
+        #if USE_SER
+        sprintf(data, "Count = %i, ahvRMS = %e, a8Ride = %e\n", count, ahvRMS, a8Ride);
+        Serial.print(data);
+        #endif
+      }
 
-		  if (count > nextADC)
-		  {
-			  // measure battery voltage
-			  // probably need an average
-			  batteryVoltage = 0;
-			  for (uint16_t i = 0; i < 64; i++ )
-			  {
-				  batteryVoltage += (uint32_t)readADC();
-			  }
-			  nextADC = count + nMeasureADC;
-			  newDataADC = true;
-			  batteryVoltage *= 163L;
-			  batteryVoltage >>= 12L;
-			  batteryVoltage += 320L;
-			  // from calibration
-			  #if USE_SER
-			  sprintf(data, "\nBattery = %i V\n", batteryVoltage);
-			  Serial.print(data);
-			  #endif
-		  }
+      if (count > nextADC)
+      {
+        // measure battery voltage
+        // probably need an average
+        batteryVoltage = 0;
+        for (uint16_t i = 0; i < 64; i++ )
+        {
+          batteryVoltage += (uint32_t)readADC();
+        }
+        nextADC = count + nMeasureADC;
+        newDataADC = true;
+        batteryVoltage *= 163L;
+        batteryVoltage >>= 12L;
+        batteryVoltage += 320L;
+        // from calibration
+        #if USE_SER
+        sprintf(data, "\nBattery = %i V\n", batteryVoltage);
+        Serial.print(data);
+        #endif
+      }
 
-		  
-		  
-		  // Could sleep til next tick
-		  #if TEST_PORT
-		  digitalWrite(signalPin, LOW);
-		  #endif
+      
+      
+      // Could sleep til next tick
+      #if TEST_PORT
+      digitalWrite(signalPin, LOW);
+      #endif
 
-	  }  // end of main for loop
+    }  // end of main for loop
   }
 }  // end of task1
 
@@ -423,37 +424,93 @@ void Task1code( void * pvParameters ){
 ////////////////////////////////////// printPower //////////////////////////////////////////
 void printPower(esp_power_level_t power)
    {
-	   #if USE_SER
-	   switch (power)   {
-		   case ESP_PWR_LVL_N12:
-		   Serial.println("Power set to N12");
-		   break;
-		   case ESP_PWR_LVL_N9:
-		   Serial.println("Power set to N9");
-		   break;
-		   case ESP_PWR_LVL_N6:
-		   Serial.println("Power set to N6");
-		   break;
-		   case ESP_PWR_LVL_N3:
-		   Serial.println("Power set to N3");
-		   break;
-		   case ESP_PWR_LVL_N0:
-		   Serial.println("Power set to N0");
-		   break;
-		   case ESP_PWR_LVL_P3:
-		   Serial.println("Power set to P3");
-		   break;
-		   case ESP_PWR_LVL_P6:
-		   Serial.println("Power set to P6");
-		   break;
-		   case ESP_PWR_LVL_P9:
-		   Serial.println("Power set to P9");
-		   break;
-		   default:
-		   Serial.println("default");
-	   }
-	   #endif
+     #if USE_SER
+     switch (power)   {
+       case ESP_PWR_LVL_N12:
+       Serial.println("Power set to N12");
+       break;
+       case ESP_PWR_LVL_N9:
+       Serial.println("Power set to N9");
+       break;
+       case ESP_PWR_LVL_N6:
+       Serial.println("Power set to N6");
+       break;
+       case ESP_PWR_LVL_N3:
+       Serial.println("Power set to N3");
+       break;
+       case ESP_PWR_LVL_N0:
+       Serial.println("Power set to N0");
+       break;
+       case ESP_PWR_LVL_P3:
+       Serial.println("Power set to P3");
+       break;
+       case ESP_PWR_LVL_P6:
+       Serial.println("Power set to P6");
+       break;
+       case ESP_PWR_LVL_P9:
+       Serial.println("Power set to P9");
+       break;
+       default:
+       Serial.println("default");
+     }
+     #endif
    }
+
+
+////////////////////////////////////// setTimeInact //////////////////////////////////////////
+
+
+void setTimeInact(int timeInactive) {
+	timeInactive = constrain(timeInactive,0,255);
+	byte _b = byte (timeInactive);
+	writeTo(ADXL345_TIME_INACT, _b);
+
+}
+////////////////////////////////////// sleepADXL //////////////////////////////////////////
+
+
+void sleepADXL() {
+	//D7 D6 D5		D4			D3			D2		D1		D0
+	//0  0  Link	AUTO_SLEEP	Measure		Sleep	Wakeup
+	byte _b;
+	readFrom(ADXL345_POWER_CTL, 1, &_b);
+	_b |= b00000100;
+	writeTo(ADXL345_POWER_CTL, _b);
+}
+
+////////////////////////////////////// powerUpADXL //////////////////////////////////////////
+
+
+void powerUpADXL() {
+	//D7 D6 D5		D4			D3			D2		D1		D0
+	//0  0  Link	AUTO_SLEEP	Measure		Sleep	Wakeup
+	writeTo(ADXL345_POWER_CTL, 8);	// Measure
+}
+
+////////////////////////////////////// standByADXL //////////////////////////////////////////
+
+
+void standByADXL() {
+	//D7 D6 D5		D4			D3			D2		D1		D0
+	//0  0  Link	AUTO_SLEEP	Measure		Sleep	Wakeup
+	writeTo(ADXL345_POWER_CTL, 0);	// Measure
+}
+
+////////////////////////////////////// standByADXL //////////////////////////////////////////
+
+
+void setActivityAC(bool state) { 
+	/*
+	state = 0 is DC; 1 is AC
+	In ac-coupled operation for activity detection, the acceleration
+	value at the start of activity detection is taken as a reference
+	value. New samples of acceleration are then compared to this
+	reference value, and if the magnitude of the difference exceeds
+	the THRESH_ACT value, the device triggers an activity interrupt.
+	*/
+	
+	setRegisterBit(ADXL345_ACT_INACT_CTL, 7, state);
+}
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 
@@ -465,13 +522,15 @@ void setup(){
   #if TEST_PORT
   pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
   pinMode(gndPin, OUTPUT); //used as ground for test probe
+  pinMode(accelerometerInt1Pin, INPUT); //used to check for accelerometer wake-up
   digitalWrite(gndPin, LOW); // 
   #endif
+  delay(5000);
   
   // Set the CPU speed
   setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
   #if USE_SER
-  Serial.print( getCpuFrequencyMhz();
+  Serial.println(getCpuFrequencyMhz());
   #endif
 
   
@@ -516,20 +575,20 @@ void setup(){
 //set advertising power   
    /*
     The power level can be one of:
-    ESP_PWR_LVL_N14
-    ESP_PWR_LVL_N11
-    ESP_PWR_LVL_N8
-    ESP_PWR_LVL_N5
-    ESP_PWR_LVL_N2
-    ESP_PWR_LVL_P1
-    ESP_PWR_LVL_P4
-    ESP_PWR_LVL_P7
+    ESP_PWR_LVL_N12
+    ESP_PWR_LVL_N9
+    ESP_PWR_LVL_N6
+    ESP_PWR_LVL_N3
+    ESP_PWR_LVL_N0
+    ESP_PWR_LVL_P3
+    ESP_PWR_LVL_P6
+    ESP_PWR_LVL_P9
 */
    if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
    {
-	   #if USE_SER
-	   Serial.println("Advertising power changed");
-	   #endif
+     #if USE_SER
+     Serial.println("Advertising power changed");
+     #endif
    }
    esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
    printPower(powerAdv);
@@ -558,6 +617,40 @@ void setup(){
   Serial.print("Range ");  Serial.println(buff[0]);
   Serial.println("Initialised accelerometer");
   #endif
+
+  
+  
+  adxl.setActivityXYZ(1, 1, 1);       // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setActivityThreshold(16);      // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+  setActivityAC(1);
+  adxl.setImportantInterruptMapping(0, 0, 0, 1, 0);     // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
+  // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
+  // This library may have a problem using INT2 pin. Default to INT1 pin.
+  adxl.ActivityINT(1);
+  sleepADXL();
+
+  
+  #if USE_SER
+  Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
+  #endif
+  
+  while(digitalRead(accelerometerInt1Pin)) {;;} // do nothing
+  
+  byte intSource = adxl.getInterruptSource();
+
+  #if USE_SER
+  Serial.print("intSource = "); Serial.println(byte, BIN);
+  Serial.print("accelerometerInt1Pin = "); Serial.println(digitalRead(accelerometerInt1Pin));
+  #endif
+  
+  // enable measurement
+  standByADXL();
+  powerUpADXL();
+	  
+  
+
+
+
   
   delay (1000);
   
@@ -585,34 +678,34 @@ void setup(){
 void loop() {
   // notify changed value
   if (deviceConnected && newDataADXL) {
-	  /*
-	  most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
-	  https://www.bluetooth.com/specifications/gatt/characteristics/
-	  send: instantaneous ahvi as one byte in BPM field
-	  cumulative ahvi as two bytes in energy field
-	  two byte instantaneous ahvi in 1st RR field
-	  two byte cumulative ahvi in 2nd RR field
-	  two byte battery voltage in 3rd RR field
-	  */
-	  
-	  dataPacket[0] = 0b00010111;
-	  dataPacket[1] = ahvInteger & 0x00ff;
-	  dataPacket[2] = ahvInteger >> 8;
-	  dataPacket[3] = batteryVoltage & 0x00ff;
-	  dataPacket[4] = batteryVoltage >> 8;
-	  dataPacket[5] = a8RideInteger & 0x00ff;
-	  dataPacket[6] = a8RideInteger >> 8;
-	  dataPacket[7] = maxAhvInteger & 0x00ff;
-	  dataPacket[8] = maxAhvInteger >> 8;
-	  dataPacket[9] = ahvInteger & 0x00ff;
-	  dataPacket[10] = ahvInteger >> 8;
+    /*
+    most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
+    https://www.bluetooth.com/specifications/gatt/characteristics/
+    send: instantaneous ahvi as one byte in BPM field
+    cumulative ahvi as two bytes in energy field
+    two byte instantaneous ahvi in 1st RR field
+    two byte cumulative ahvi in 2nd RR field
+    two byte battery voltage in 3rd RR field
+    */
+    
+    dataPacket[0] = 0b00010111;
+    dataPacket[1] = ahvInteger & 0x00ff;
+    dataPacket[2] = ahvInteger >> 8;
+    dataPacket[3] = batteryVoltage & 0x00ff;
+    dataPacket[4] = batteryVoltage >> 8;
+    dataPacket[5] = a8RideInteger & 0x00ff;
+    dataPacket[6] = a8RideInteger >> 8;
+    dataPacket[7] = maxAhvInteger & 0x00ff;
+    dataPacket[8] = maxAhvInteger >> 8;
+    dataPacket[9] = ahvInteger & 0x00ff;
+    dataPacket[10] = ahvInteger >> 8;
 
-	  pCharacteristic->setValue(dataPacket, 11);
-	  pCharacteristic->notify();
-	  newDataADXL = false;
-	  digitalWrite(ledPin, HIGH);
-	  delay(100);
-	  digitalWrite(ledPin, LOW);
+    pCharacteristic->setValue(dataPacket, 11);
+    pCharacteristic->notify();
+    newDataADXL = false;
+    digitalWrite(ledPin, HIGH);
+    delay(100);
+    digitalWrite(ledPin, LOW);
   }
   // disconnecting
   if (!deviceConnected && oldDeviceConnected) {
@@ -625,21 +718,21 @@ void loop() {
   }
   // connecting
   if (deviceConnected && !oldDeviceConnected) {
-	  // do stuff here on connecting
-	  
-	  if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
-	  {
-		  #if USE_SER
-		  Serial.println("Connecting power changed");
-		  #endif
-	  }
-	  esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
-	  printPower(powerConn);
+    // do stuff here on connecting
+    
+    if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
+    {
+      #if USE_SER
+      Serial.println("Connecting power changed");
+      #endif
+    }
+    esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
+    printPower(powerConn);
 
-	  
-	  #if USE_SER
-	  Serial.println("connected");
-	  #endif
-	  oldDeviceConnected = deviceConnected;
+    
+    #if USE_SER
+    Serial.println("connected");
+    #endif
+    oldDeviceConnected = deviceConnected;
   }
 }
