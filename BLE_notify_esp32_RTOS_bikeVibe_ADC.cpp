@@ -54,7 +54,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <driver/adc.h> // for ADC reading
-
+#include <driver/rtc_io.h> // for use of RTC GPIO pins
 
 
 #include <SparkFun_ADXL345.h>         // SparkFun ADXL345 Library
@@ -89,7 +89,7 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define USE_SER 1
 #define TEST_PORT 0 // used to test timing of the core ADXL read loop
 
-RTC_DATA_ATTR int bootCount = 0;
+RTC_DATA_ATTR int bootCount = 0; // logs number of times rebooted
 
 
 
@@ -109,7 +109,7 @@ const int adcPin = 13;
 const int signalPin = 14;
 const int gndPin = 27;
 #endif
-// RTC GPIO 10 is used as EXT0 to wakeup ESP32 from deep sleep
+// RTC GPIO 4 is used as EXT0 to wakeup ESP32 from deep sleep
 
 
 //initialise vspi with default pins
@@ -128,6 +128,7 @@ const double tickPeriod = 1. / (double)tickFrequency;  // used in simulation
 const double time0 = 28800.0;                    // the reference duration of eight hours (28,800s)
 volatile bool timeOut = false;
 volatile bool tick = false;
+volatile bool shutDown = false;
 
 
 // reporting
@@ -361,16 +362,27 @@ void Task1code( void * pvParameters ){
         ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
         if (ahvRMS > 0.06)
         {
-          sumRide += sum; // sum ahvi^2 for whole ride
-          ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-          maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-      lastTimeNonZero = count;
+	        sumRide += sum; // sum ahvi^2 for whole ride
+	        ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+	        maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+	        lastTimeNonZero = count;
         }
         else // consider the measurement is noise
         {
-          ahvInteger = 0;
-          maxAhvInteger = 0;
-      //if ((count - lastTimeNonZero) > timeBeforeSleep) enterDeepSleep();
+	        ahvInteger = 0;
+	        maxAhvInteger = 0;
+	        if ((count - lastTimeNonZero) > timeBeforeSleep) 
+			{
+				#if TEST_PORT
+				digitalWrite(signalPin, LOW);
+				#endif
+				#if USE_SER
+				Serial.println("Shutting down ADXL measurement task");
+				#endif
+				shutDown = true;
+				vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
+				while(true) {}; // do nothing while waiting for task to end
+			}
         }
         a8Ride = sqrtf(sumRide * tickPeriod / time0);
         a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
@@ -493,16 +505,15 @@ void print_wakeup_reason(){
 
 void enterDeepSleep()
 {
-  adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-    adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
-    adxl.setActivityAC(1);
-    adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
-    // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
-    // This library may have a problem using INT2 pin. Default to INT1 pin.
-    adxl.ActivityINT(1);
-    Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
-    
-    adxl.sleep();
+	adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+	adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+	adxl.setActivityAC(1);
+	adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
+	// Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
+	// This library may have a problem using INT2 pin. Default to INT1 pin.
+	adxl.ActivityINT(1);
+	Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
+	adxl.sleep();
   
     
     #if USE_SER
@@ -511,9 +522,12 @@ void enterDeepSleep()
     
     
     /*
-    configure the wake up source as RTC GPIO 10; connect INT1 from ADXL345 to this pin
+    configure the wake up source as RTC GPIO 4; connect INT1 from ADXL345 to this pin
     */
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_10,1); //1 = High, 0 = Low
+    
+    rtc_gpio_init(GPIO_NUM_4);
+    rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);    
+    esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
     
     /*
@@ -540,15 +554,27 @@ void enterDeepSleep()
     Serial.println("Going to sleep now");
     Serial.flush(); 
     #endif
-    //esp_deep_sleep_start();
+    esp_deep_sleep_start();
+}
+
+////////////////////////////////////// flash //////////////////////////////////////////
+void flash(int nTimes, int ledPinNo)
+{
+	for (int i = 0; i <= nTimes; i++)
+	{
+		digitalWrite(ledPinNo, HIGH);
+		delay(50);
+		digitalWrite(ledPinNo, LOW);
+		delay(200);
+	}
 }
 
 ////////////////////////////////////// setup //////////////////////////////////////////
 
-
 void setup(){
   #if USE_SER
   Serial.begin(115200);
+  delay(5000);
   #endif
   pinMode(ledPin, OUTPUT);
   #if TEST_PORT
@@ -556,7 +582,6 @@ void setup(){
   pinMode(gndPin, OUTPUT); //used as ground for test probe
   digitalWrite(gndPin, LOW); //
   #endif
-  delay(5000);
   
   // Set the CPU speed
   setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
@@ -670,7 +695,6 @@ void setup(){
 
   
   
-  delay (1000);
   
   disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
   // see epic thread https://github.com/espressif/arduino-esp32/issues/595
@@ -684,10 +708,8 @@ void setup(){
   2,           /* priority of the task */
   &Task1,      /* Task handle to keep track of created task */
   0);          /* pin task to core 0 */
-  delay(1000);
   
-
-  
+  flash(3, ledPin);
 }
 
 
@@ -753,4 +775,17 @@ void loop() {
     #endif
     oldDeviceConnected = deviceConnected;
   }
+  /*
+   test for shutdown from task 1 on core 0
+   the test could equally well be made in task 2 (core 1)
+   we shutdown the measurement task, deinit BLE and then enter deep sleep; the first two steps are probably not needed
+   */
+  if (shutDown)
+  {
+	  BLEDevice::deinit(true);
+	  flash(5, ledPin);
+	  enterDeepSleep();
+  }
+  
+  
 }
