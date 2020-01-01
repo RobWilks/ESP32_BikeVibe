@@ -86,7 +86,7 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1000. / 1.024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
-#define USE_SER 1
+#define USE_SER 0
 #define TEST_PORT 0 // used to test timing of the core ADXL read loop
 
 RTC_DATA_ATTR int bootCount = 0; // logs number of times rebooted
@@ -140,7 +140,7 @@ volatile uint16_t maxAhvInteger; // max exposure
 volatile uint32_t batteryVoltage; // battery voltage measured with ADC (Vin not regulator voltage)
 
 // sleep
-const uint32_t timeBeforeSleep = 10000;
+const uint32_t timeBeforeSleep = 30000;
 
 
 ////////////////////////////////////// BLE parameters //////////////////////////////////////////
@@ -149,6 +149,9 @@ BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
+bool ledOn = false;
+const uint32_t timeLedOn = 100; //msec
+uint32_t timeLedOff;
 volatile bool newDataADXL = false;
 volatile bool newDataADC = false;
 //uint32_t dataPacket;
@@ -362,27 +365,27 @@ void Task1code( void * pvParameters ){
         ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
         if (ahvRMS > 0.06)
         {
-	        sumRide += sum; // sum ahvi^2 for whole ride
-	        ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-	        maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-	        lastTimeNonZero = count;
+          sumRide += sum; // sum ahvi^2 for whole ride
+          ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+          maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+          lastTimeNonZero = count;
         }
         else // consider the measurement is noise
         {
-	        ahvInteger = 0;
-	        maxAhvInteger = 0;
-	        if ((count - lastTimeNonZero) > timeBeforeSleep) 
-			{
-				#if TEST_PORT
-				digitalWrite(signalPin, LOW);
-				#endif
-				#if USE_SER
-				Serial.println("Shutting down ADXL measurement task");
-				#endif
-				shutDown = true;
-				vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
-				while(true) {}; // do nothing while waiting for task to end
-			}
+          ahvInteger = 0;
+          maxAhvInteger = 0;
+          if ((count - lastTimeNonZero) > timeBeforeSleep) 
+      {
+        #if TEST_PORT
+        digitalWrite(signalPin, LOW);
+        #endif
+        #if USE_SER
+        Serial.println("Shutting down ADXL measurement task");
+        #endif
+        shutDown = true;
+        vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
+        while(true) {}; // do nothing while waiting for task to end
+      }
         }
         a8Ride = sqrtf(sumRide * tickPeriod / time0);
         a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
@@ -490,6 +493,8 @@ void print_wakeup_reason(){
   esp_sleep_wakeup_cause_t wakeup_reason;
 
   wakeup_reason = esp_sleep_get_wakeup_cause();
+  #if USE_SER
+
 
   switch(wakeup_reason)
   {
@@ -500,78 +505,84 @@ void print_wakeup_reason(){
     case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
     default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
   }
+  #endif
 }
 ////////////////////////////////////// enterDeepSleep //////////////////////////////////////////
 
 void enterDeepSleep()
 {
-	adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-	adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
-	adxl.setActivityAC(1);
-	adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
-	// Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
-	// This library may have a problem using INT2 pin. Default to INT1 pin.
-	adxl.ActivityINT(1);
-	Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
-	adxl.sleep();
+  adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+  adxl.setActivityAC(1);
+  adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
+  // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
+  // This library may have a problem using INT2 pin. Default to INT1 pin.
+  adxl.ActivityINT(1);
+  #if USE_SER
+  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
+  #endif
+  adxl.sleep();
   
-    
-    #if USE_SER
-    Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
-    #endif
-    
-    
-    /*
-    configure the wake up source as RTC GPIO 4; connect INT1 from ADXL345 to this pin
-    */
-    
-    rtc_gpio_init(GPIO_NUM_4);
-    rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);    
-    esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
+  
+  #if USE_SER
+  Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
+  #endif
+  
+  
+  /*
+  configure the wake up source as RTC GPIO 4; connect INT1 from ADXL345 to this pin
+  */
+  
+  rtc_gpio_init(GPIO_NUM_4);
+  rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
-    
-    /*
-    Next we decide what all peripherals to shut down/keep on
-    By default, ESP32 will automatically power down the peripherals
-    not needed by the wakeup source, but if you want to be a poweruser
-    this is for you. Read in detail at the API docs
-    http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
-    Left the line commented as an example of how to configure peripherals.
-    The line below turns off all RTC peripherals in deep sleep.
-    */
-    //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
-    //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
-    
-    /*
-    Now that we have setup a wake cause and if needed setup the
-    peripherals state in deep sleep, we can now start going to
-    deep sleep.
-    In the case that no wake up sources were provided but deep
-    sleep was started, it will sleep forever unless hardware
-    reset occurs.
-    */
-    #if USE_SER
-    Serial.println("Going to sleep now");
-    Serial.flush(); 
-    #endif
-    esp_deep_sleep_start();
+  
+  /*
+  Next we decide what all peripherals to shut down/keep on
+  By default, ESP32 will automatically power down the peripherals
+  not needed by the wakeup source, but if you want to be a poweruser
+  this is for you. Read in detail at the API docs
+  http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
+  Left the line commented as an example of how to configure peripherals.
+  The line below turns off all RTC peripherals in deep sleep.
+  */
+  //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+  //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
+  
+  /*
+  Now that we have setup a wake cause and if needed setup the
+  peripherals state in deep sleep, we can now start going to
+  deep sleep.
+  In the case that no wake up sources were provided but deep
+  sleep was started, it will sleep forever unless hardware
+  reset occurs.
+  */
+  #if USE_SER
+  Serial.println("Going to sleep now");
+  Serial.flush();
+  #endif
+  esp_deep_sleep_start();
 }
 
 ////////////////////////////////////// flash //////////////////////////////////////////
 void flash(int nTimes, int ledPinNo)
 {
-	for (int i = 0; i <= nTimes; i++)
-	{
-		digitalWrite(ledPinNo, HIGH);
-		delay(50);
-		digitalWrite(ledPinNo, LOW);
-		delay(200);
-	}
+  for (int i = 0; i <= nTimes; i++)
+  {
+    digitalWrite(ledPinNo, HIGH);
+    delay(50);
+    digitalWrite(ledPinNo, LOW);
+    delay(200);
+  }
 }
 
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 void setup(){
+  // Set the CPU speed
+  setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
+
   #if USE_SER
   Serial.begin(115200);
   delay(5000);
@@ -583,8 +594,6 @@ void setup(){
   digitalWrite(gndPin, LOW); //
   #endif
   
-  // Set the CPU speed
-  setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
   #if USE_SER
   Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
   #endif
@@ -629,8 +638,8 @@ void setup(){
   pAdvertising->setScanResponse(false);
   pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
   BLEDevice::startAdvertising();
-  delay(5000); // added by rjw so as to start serial client
   #if USE_SER
+  //delay(5000); // added by rjw so as to start serial client
   Serial.println("Waiting a client connection to notify...");
   #endif
 
@@ -744,8 +753,8 @@ void loop() {
     pCharacteristic->notify();
     newDataADXL = false;
     digitalWrite(ledPin, HIGH);
-    delay(100);
-    digitalWrite(ledPin, LOW);
+	timeLedOff = millis() + timeLedOn; //msec
+	ledOn = true;
   }
   // disconnecting
   if (!deviceConnected && oldDeviceConnected) {
@@ -782,10 +791,17 @@ void loop() {
    */
   if (shutDown)
   {
-	  BLEDevice::deinit(true);
-	  flash(5, ledPin);
-	  enterDeepSleep();
+    BLEDevice::deinit(true);
+    flash(5, ledPin);
+    enterDeepSleep();
   }
-  
-  
+  if (ledOn)
+  {
+	  if (millis() > timeLedOff)
+	  {
+		  digitalWrite(ledPin, LOW);
+		  ledOn = false;
+	  }
+
+  } 
 }
