@@ -86,8 +86,8 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1000. / 1.024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
-#define USE_SER 0
-#define TEST_PORT 0 // used to test timing of the core ADXL read loop
+#define USE_SER 1
+#define TEST_PORT 1 // used to test timing of the core ADXL read loop
 
 RTC_DATA_ATTR int bootCount = 0; // logs number of times rebooted
 
@@ -158,7 +158,8 @@ volatile bool newDataADC = false;
 uint8_t dataPacket[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // change type of datapacket to allow more bytes to be sent
 
 
-TaskHandle_t Task1;
+TaskHandle_t vibeTask;
+TaskHandle_t commsTask;
 
 
 
@@ -198,18 +199,24 @@ portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 volatile uint32_t isrCounter = 0;
 volatile uint32_t lastIsrAt = 0;
 
+////////////////////////////////////// onTimer //////////////////////////////////////////
 
 
 void IRAM_ATTR onTimer(){
-  // Increment the counter and set the time of ISR
-  portENTER_CRITICAL_ISR(&timerMux);
-  isrCounter++;
-  lastIsrAt = millis();
-  portEXIT_CRITICAL_ISR(&timerMux);
-  // Give a semaphore that we can check in the loop
-  xSemaphoreGiveFromISR(timerSemaphore, NULL);
-  // It is safe to use digitalRead/Write here if you want to toggle an output
+	// Increment the counter and set the time of ISR
+	portENTER_CRITICAL_ISR(&timerMux);
+	isrCounter++;
+	lastIsrAt = millis();
+	portEXIT_CRITICAL_ISR(&timerMux);
+	
+	
+	// Give a semaphore that we can check in the loop
+	xSemaphoreGiveFromISR(timerSemaphore, NULL);
+	// It is safe to use digitalRead/Write here if you want to toggle an output
+
 }
+////////////////////////////////////// initTime //////////////////////////////////////////
+
 
 void initTime(uint32_t period)
 // check type for period
@@ -288,6 +295,7 @@ void applyFilter(const double filterCoeffs[3][6], double filteredValues[3][3][4]
 }
 
 ////////////////////////////////////// calcAcc //////////////////////////////////////////
+// for simulation of vibration input
 
 void calcAcc(uint32_t dataCount, int16_t * buff )
 {
@@ -299,137 +307,6 @@ void calcAcc(uint32_t dataCount, int16_t * buff )
   buff[1] = x;
   buff[2] = x;
 }
-
-////////////////////////////////////// Task1code //////////////////////////////////////////
-
-
-
-//Task1code: measures vibration every 1 ms
-void Task1code( void * pvParameters ){
-  //Serial.print("Task1 running on core ");
-  //Serial.println(xPortGetCoreID());
-  uint32_t nextCount = nMeasureADXL + nOmit; // determines when data available for BT comm
-  uint32_t nextADC = nMeasureADC; // determines when data available for BT comm
-  uint32_t count = 0;
-  uint32_t lastTimeNonZero = 0;
-  double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
-  double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
-  double sumRide = 0; // sum since last reset
-  double ahvRMS; // RMS exposure over integration period
-  double a8Ride = 0; // total exposure to vibration since last reset
-
-  for (;;) {// wait til tick
-    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
-      #if TEST_PORT
-      digitalWrite(signalPin, HIGH);
-      #endif
-      uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
-      #if SIMULATE
-      calcAcc(count, (int16_t *)buff);
-      #else
-      adxl.readAcc((int16_t *)buff);
-      #endif //simulate
-      calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
-      if (count < 2) {
-        for (uint8_t j = 0; j < 3; j++) {
-          for (uint8_t k = 1; k < 4; k++) {
-            filteredValues[j][count][k] = filteredValues[j][count][0];
-          }
-        }
-        } else {
-        applyFilter(filterCoeffs, filteredValues, lastValue);
-      }
-      ++count;
-      // calculate rms values and ahvSquared
-      
-      // omit first few readings to allow infinite impulse filter to settle
-      if (count > nOmit)
-      {
-        double result = 0; // temporary result to allow calculation of maximum ahv
-        for (uint8_t i = 0; i < 3; i++) {
-          result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-        }
-        sum += result;
-        // measure max
-        if (maxAhvSquared < result)
-        {
-          maxAhvSquared = result;
-        }
-        
-      }
-
-      if (count > nextCount)
-      {
-        nextCount = count + nMeasureADXL;
-        // calculate contribution to daily exposure according to ISO5349
-        ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-        if (ahvRMS > 0.06)
-        {
-          sumRide += sum; // sum ahvi^2 for whole ride
-          ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-          maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-          lastTimeNonZero = count;
-        }
-        else // consider the measurement is noise
-        {
-          ahvInteger = 0;
-          maxAhvInteger = 0;
-          if ((count - lastTimeNonZero) > timeBeforeSleep) 
-      {
-        #if TEST_PORT
-        digitalWrite(signalPin, LOW);
-        #endif
-        #if USE_SER
-        Serial.println("Shutting down ADXL measurement task");
-        #endif
-        shutDown = true;
-        vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
-        while(true) {}; // do nothing while waiting for task to end
-      }
-        }
-        a8Ride = sqrtf(sumRide * tickPeriod / time0);
-        a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-        // the result is in mm/s/s
-        newDataADXL = true;
-        sum = 0;
-        maxAhvSquared = 0;
-        #if USE_SER
-        sprintf(data, "Count = %i, ahvRMS = %e, a8Ride = %e\n", count, ahvRMS, a8Ride);
-        Serial.print(data);
-        #endif
-      }
-
-      if (count > nextADC)
-      {
-        // measure battery voltage
-        // probably need an average
-        batteryVoltage = 0;
-        for (uint16_t i = 0; i < 64; i++ )
-        {
-          batteryVoltage += (uint32_t)readADC();
-        }
-        nextADC = count + nMeasureADC;
-        newDataADC = true;
-        batteryVoltage *= 163L;
-        batteryVoltage >>= 12L;
-        batteryVoltage += 320L;
-        // from calibration
-        #if USE_SER
-        sprintf(data, "\nBattery = %i V\n", batteryVoltage);
-        Serial.print(data);
-        #endif
-      }
-
-      
-      
-      // Could sleep til next tick
-      #if TEST_PORT
-      digitalWrite(signalPin, LOW);
-      #endif
-
-    }  // end of main for loop
-  }
-}  // end of task1
 
 
 ////////////////////////////////////// readADC //////////////////////////////////////////
@@ -535,6 +412,10 @@ void enterDeepSleep()
   
   rtc_gpio_init(GPIO_NUM_4);
   rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
+  
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF); // power down slow memory on RTC module
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
+  
   esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
   
@@ -693,7 +574,7 @@ void setup(){
 
   adxl.getRangeSetting(buff);
   
-  initTime(1000000L / tickFrequency); // Configure timer
+  initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
   
   #if USE_SER
   Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
@@ -705,103 +586,262 @@ void setup(){
   
   
   
-  disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
+  //disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
   // see epic thread https://github.com/espressif/arduino-esp32/issues/595
   
-  //create a task that will be executed in the Task1code() function, with priority 2 and executed on core 0
+  //create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
   xTaskCreatePinnedToCore(
-  Task1code,   /* Task function. */
-  "Task1",     /* name of task. */
+  measureVibration,   /* Task function. */
+  "vibeTask",     /* name of task. */
   10000,       /* Stack size of task */
   NULL,        /* parameter of the task */
   2,           /* priority of the task */
-  &Task1,      /* Task handle to keep track of created task */
+  &vibeTask,      /* Task handle to keep track of created task */
+  1);          /* pin task to core 1 */
+
+  
+  //create a task that will be executed in the BLEComms() function, with priority 2 and executed on core 0
+  xTaskCreatePinnedToCore(
+  BLEComms,   /* Task function. */
+  "commsTask",     /* name of task. */
+  28800,       /* Stack size of task */
+  NULL,        /* parameter of the task */
+  2,           /* priority of the task */
+  &commsTask,      /* Task handle to keep track of created task */
   0);          /* pin task to core 0 */
+
   
   flash(3, ledPin);
 }
 
-
-////////////////////////////////////// main loop core 1 //////////////////////////////////////////
-
-void loop() {
-  // notify changed value
-  if (deviceConnected && newDataADXL) {
-    /*
-    most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
-    https://www.bluetooth.com/specifications/gatt/characteristics/
-    send: instantaneous ahvi as one byte in BPM field
-    cumulative ahvi as two bytes in energy field
-    two byte instantaneous ahvi in 1st RR field
-    two byte cumulative ahvi in 2nd RR field
-    two byte battery voltage in 3rd RR field
-    */
-    
-    dataPacket[0] = 0b00010111;
-    dataPacket[1] = ahvInteger & 0x00ff;
-    dataPacket[2] = ahvInteger >> 8;
-    dataPacket[3] = batteryVoltage & 0x00ff;
-    dataPacket[4] = batteryVoltage >> 8;
-    dataPacket[5] = a8RideInteger & 0x00ff;
-    dataPacket[6] = a8RideInteger >> 8;
-    dataPacket[7] = maxAhvInteger & 0x00ff;
-    dataPacket[8] = maxAhvInteger >> 8;
-    dataPacket[9] = ahvInteger & 0x00ff;
-    dataPacket[10] = ahvInteger >> 8;
-
-    pCharacteristic->setValue(dataPacket, 11);
-    pCharacteristic->notify();
-    newDataADXL = false;
-    digitalWrite(ledPin, HIGH);
-	timeLedOff = millis() + timeLedOn; //msec
-	ledOn = true;
-  }
-  // disconnecting
-  if (!deviceConnected && oldDeviceConnected) {
-    delay(500); // give the bluetooth stack the chance to get things ready
-    pServer->startAdvertising(); // restart advertising
-  #if USE_SER
-    Serial.println("start advertising");
-  #endif
-    oldDeviceConnected = deviceConnected;
-  }
-  // connecting
-  if (deviceConnected && !oldDeviceConnected) {
-    // do stuff here on connecting
-    
-    if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
-    {
-      #if USE_SER
-      Serial.println("Connecting power changed");
-      #endif
-    }
-    esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
-    printPower(powerConn);
-
-    
-    #if USE_SER
-    Serial.println("connected");
-    #endif
-    oldDeviceConnected = deviceConnected;
-  }
-  /*
-   test for shutdown from task 1 on core 0
-   the test could equally well be made in task 2 (core 1)
-   we shutdown the measurement task, deinit BLE and then enter deep sleep; the first two steps are probably not needed
-   */
-  if (shutDown)
-  {
-    BLEDevice::deinit(true);
-    flash(5, ledPin);
-    enterDeepSleep();
-  }
-  if (ledOn)
-  {
-	  if (millis() > timeLedOff)
-	  {
-		  digitalWrite(ledPin, LOW);
-		  ledOn = false;
-	  }
-
-  } 
+////////////////////////////////////// loop //////////////////////////////////////////
+void loop()
+{
+  // Empty. Things are done in Tasks.
 }
+
+
+////////////////////////////////////// measureVibration //////////////////////////////////////////
+//measureVibration: measures vibration every 1 ms
+//
+void measureVibration( void * pvParameters ){
+  //Serial.print("vibeTask running on core ");
+  //Serial.println(xPortGetCoreID());
+  uint32_t nextCount = nMeasureADXL + nOmit; // determines when data available for BT comm
+  uint32_t nextADC = nMeasureADC; // determines when data available for BT comm
+  uint32_t count = 0;
+  uint32_t lastTimeNonZero = 0;
+  double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
+  double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
+  double sumRide = 0; // sum since last reset
+  double ahvRMS; // RMS exposure over integration period
+  double a8Ride = 0; // total exposure to vibration since last reset
+
+  for (;;) {// wait til tick
+    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+      #if TEST_PORT
+      digitalWrite(signalPin, HIGH);
+      #endif
+      uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
+      #if SIMULATE
+      calcAcc(count, (int16_t *)buff);
+      #else
+      adxl.readAcc((int16_t *)buff);
+      #endif //simulate
+      calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
+      if (count < 2) {
+        for (uint8_t j = 0; j < 3; j++) {
+          for (uint8_t k = 1; k < 4; k++) {
+            filteredValues[j][count][k] = filteredValues[j][count][0];
+          }
+        }
+        } else {
+        applyFilter(filterCoeffs, filteredValues, lastValue);
+      }
+      ++count;
+      // calculate rms values and ahvSquared
+      
+      // omit first few readings to allow infinite impulse filter to settle
+      if (count > nOmit)
+      {
+        double result = 0; // temporary result to allow calculation of maximum ahv
+        for (uint8_t i = 0; i < 3; i++) {
+          result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+        }
+        sum += result;
+        // measure max
+        if (maxAhvSquared < result)
+        {
+          maxAhvSquared = result;
+        }
+        
+      }
+
+      if (count > nextCount)
+      {
+        nextCount = count + nMeasureADXL;
+        // calculate contribution to daily exposure according to ISO5349
+        ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+        if (ahvRMS > 0.06)
+        {
+          sumRide += sum; // sum ahvi^2 for whole ride
+          ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+          maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+          lastTimeNonZero = count;
+        }
+        else // consider the measurement is noise
+        {
+          ahvInteger = 0;
+          maxAhvInteger = 0;
+          if ((count - lastTimeNonZero) > timeBeforeSleep)
+          {
+            #if TEST_PORT
+            digitalWrite(signalPin, LOW);
+            #endif
+            #if USE_SER
+            Serial.println("Shutting down ADXL measurement task");
+            #endif
+            shutDown = true;
+            vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
+            while(true) {}; // do nothing while waiting for task to end
+          }
+        }
+        a8Ride = sqrtf(sumRide * tickPeriod / time0);
+        a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
+        // the result is in mm/s/s
+        newDataADXL = true;
+        sum = 0;
+        maxAhvSquared = 0;
+        #if USE_SER
+        sprintf(data, "Count = %i, ahvRMS = %e, a8Ride = %e\n", count, ahvRMS, a8Ride);
+        Serial.print(data);
+        #endif
+      }
+
+      if (count > nextADC)
+      {
+        // measure battery voltage
+        // probably need an average
+        batteryVoltage = 0;
+        for (uint16_t i = 0; i < 64; i++ )
+        {
+          batteryVoltage += (uint32_t)readADC();
+        }
+        nextADC = count + nMeasureADC;
+        newDataADC = true;
+        batteryVoltage *= 163L;
+        batteryVoltage >>= 12L;
+        batteryVoltage += 320L;
+        // from calibration
+        #if USE_SER
+        sprintf(data, "\nBattery = %i V\n", batteryVoltage);
+        Serial.print(data);
+        #endif
+      }
+
+      
+      
+      // Could sleep til next tick
+      #if TEST_PORT
+      digitalWrite(signalPin, LOW);
+      #endif
+
+    }  // end of main for loop
+  }
+}  // end of measureVibration task
+
+
+////////////////////////////////////// BLEComms //////////////////////////////////////////
+
+void BLEComms(void * pvParameters ) {
+  
+  while(true)
+  {
+    TickType_t xLastWakeTime;
+    // Block for 20ms.
+    const TickType_t xDelay = 20 / portTICK_PERIOD_MS; // default is 100Hz i.e. 10ms
+    // Initialise the xLastWakeTime variable with the current time.
+    xLastWakeTime = xTaskGetTickCount ();
+    vTaskDelayUntil( &xLastWakeTime, xDelay );
+
+    // notify changed value
+    if (deviceConnected && newDataADXL) {
+      /*
+      most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
+      https://www.bluetooth.com/specifications/gatt/characteristics/
+      send: instantaneous ahvi as one byte in BPM field
+      cumulative ahvi as two bytes in energy field
+      two byte instantaneous ahvi in 1st RR field
+      two byte cumulative ahvi in 2nd RR field
+      two byte battery voltage in 3rd RR field
+      */
+      
+      dataPacket[0] = 0b00010111;
+      dataPacket[1] = ahvInteger & 0x00ff;
+      dataPacket[2] = ahvInteger >> 8;
+      dataPacket[3] = batteryVoltage & 0x00ff;
+      dataPacket[4] = batteryVoltage >> 8;
+      dataPacket[5] = a8RideInteger & 0x00ff;
+      dataPacket[6] = a8RideInteger >> 8;
+      dataPacket[7] = maxAhvInteger & 0x00ff;
+      dataPacket[8] = maxAhvInteger >> 8;
+      dataPacket[9] = ahvInteger & 0x00ff;
+      dataPacket[10] = ahvInteger >> 8;
+
+      pCharacteristic->setValue(dataPacket, 11);
+      pCharacteristic->notify();
+      newDataADXL = false;
+      digitalWrite(ledPin, HIGH);
+      timeLedOff = millis() + timeLedOn; //msec
+      ledOn = true;
+    }
+    // disconnecting
+    if (!deviceConnected && oldDeviceConnected) {
+      delay(500); // give the bluetooth stack the chance to get things ready
+      pServer->startAdvertising(); // restart advertising
+      #if USE_SER
+      Serial.println("start advertising");
+      #endif
+      oldDeviceConnected = deviceConnected;
+    }
+    // connecting
+    if (deviceConnected && !oldDeviceConnected) {
+      // do stuff here on connecting
+      
+      if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
+      {
+        #if USE_SER
+        Serial.println("Connecting power changed");
+        #endif
+      }
+      esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
+      printPower(powerConn);
+
+      
+      #if USE_SER
+      Serial.println("connected");
+      #endif
+      oldDeviceConnected = deviceConnected;
+    }
+    /*
+    test for shutdown from task 1 on core 0
+    the test could equally well be made in task 2 (core 1)
+    we shutdown the measurement task, deinit BLE and then enter deep sleep; the first two steps are probably not needed
+    */
+    if (shutDown)
+    {
+      BLEDevice::deinit(true);
+      flash(5, ledPin);
+      enterDeepSleep();
+    }
+    if (ledOn)
+    {
+      if (millis() > timeLedOff)
+      {
+        digitalWrite(ledPin, LOW);
+        ledOn = false;
+      }
+
+    }
+  }
+} // end of main while loop
