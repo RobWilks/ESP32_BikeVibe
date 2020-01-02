@@ -529,7 +529,7 @@ void setup(){
   
   
   
-  //disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
+  disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
   // see epic thread https://github.com/espressif/arduino-esp32/issues/595
   
   //create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 0
