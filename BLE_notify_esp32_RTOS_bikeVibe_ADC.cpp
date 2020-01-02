@@ -487,64 +487,7 @@ void setup(){
   //Print the wakeup reason for ESP32
   print_wakeup_reason();
 
-  // Create the BLE Device
-  BLEDevice::init("ESP32");
 
-  // Create the BLE Server
-  pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  // Create the BLE Service
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-
-  // Create a BLE Characteristic
-  pCharacteristic = pService->createCharacteristic(
-  CHARACTERISTIC_UUID,
-  BLECharacteristic::PROPERTY_READ   |
-  BLECharacteristic::PROPERTY_WRITE  |
-  BLECharacteristic::PROPERTY_NOTIFY |
-  BLECharacteristic::PROPERTY_INDICATE
-  );
-
-  // https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
-  // Create a BLE Descriptor
-  pCharacteristic->addDescriptor(new BLE2902());
-
-  // Start the service
-  pService->start();
-
-  // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
-  pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
-  BLEDevice::startAdvertising();
-  #if USE_SER
-  //delay(5000); // added by rjw so as to start serial client
-  Serial.println("Waiting a client connection to notify...");
-  #endif
-
-  //set advertising power
-  /*
-  The power level can be one of:
-  ESP_PWR_LVL_N12
-  ESP_PWR_LVL_N9
-  ESP_PWR_LVL_N6
-  ESP_PWR_LVL_N3
-  ESP_PWR_LVL_N0
-  ESP_PWR_LVL_P3
-  ESP_PWR_LVL_P6
-  ESP_PWR_LVL_P9
-  */
-  if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
-  {
-    #if USE_SER
-    Serial.println("Advertising power changed");
-    #endif
-  }
-  esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
-  printPower(powerAdv);
-  
   // configure accelerometer
 
   adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
@@ -589,7 +532,7 @@ void setup(){
   //disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
   // see epic thread https://github.com/espressif/arduino-esp32/issues/595
   
-  //create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
+  //create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 0
   xTaskCreatePinnedToCore(
   measureVibration,   /* Task function. */
   "vibeTask",     /* name of task. */
@@ -597,18 +540,18 @@ void setup(){
   NULL,        /* parameter of the task */
   2,           /* priority of the task */
   &vibeTask,      /* Task handle to keep track of created task */
-  1);          /* pin task to core 1 */
+  0);          /* pin task to core 0 */
 
   
-  //create a task that will be executed in the BLEComms() function, with priority 2 and executed on core 0
+  //create a task that will be executed in the BLEComms() function, with priority 1 and executed on core 1
   xTaskCreatePinnedToCore(
   BLEComms,   /* Task function. */
   "commsTask",     /* name of task. */
   28800,       /* Stack size of task */
   NULL,        /* parameter of the task */
-  2,           /* priority of the task */
+  1,           /* priority of the task */
   &commsTask,      /* Task handle to keep track of created task */
-  0);          /* pin task to core 0 */
+  1);          /* pin task to core 1 */
 
   
   flash(3, ledPin);
@@ -755,14 +698,73 @@ void measureVibration( void * pvParameters ){
 
 void BLEComms(void * pvParameters ) {
   
+  // Create the BLE Device
+  BLEDevice::init("ESP32");
+
+  // Create the BLE Server
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create the BLE Service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  // Create a BLE Characteristic
+  pCharacteristic = pService->createCharacteristic(
+  CHARACTERISTIC_UUID,
+  BLECharacteristic::PROPERTY_READ   |
+  BLECharacteristic::PROPERTY_WRITE  |
+  BLECharacteristic::PROPERTY_NOTIFY |
+  BLECharacteristic::PROPERTY_INDICATE
+  );
+
+  // https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
+  // Create a BLE Descriptor
+  pCharacteristic->addDescriptor(new BLE2902());
+
+  // Start the service
+  pService->start();
+
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+  BLEDevice::startAdvertising();
+  #if USE_SER
+  //delay(5000); // added by rjw so as to start serial client
+  Serial.println("Waiting a client connection to notify...");
+  #endif
+
+  //set advertising power
+  /*
+  The power level can be one of:
+  ESP_PWR_LVL_N12
+  ESP_PWR_LVL_N9
+  ESP_PWR_LVL_N6
+  ESP_PWR_LVL_N3
+  ESP_PWR_LVL_N0
+  ESP_PWR_LVL_P3
+  ESP_PWR_LVL_P6
+  ESP_PWR_LVL_P9
+  */
+  if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
+  {
+    #if USE_SER
+    Serial.println("Advertising power changed");
+    #endif
+  }
+  esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+  printPower(powerAdv);
+  
+  
   while(true)
   {
-    TickType_t xLastWakeTime;
-    // Block for 20ms.
-    const TickType_t xDelay = 20 / portTICK_PERIOD_MS; // default is 100Hz i.e. 10ms
-    // Initialise the xLastWakeTime variable with the current time.
-    xLastWakeTime = xTaskGetTickCount ();
-    vTaskDelayUntil( &xLastWakeTime, xDelay );
+    //TickType_t xLastWakeTime;
+    //// Block for 20ms.
+    //const TickType_t xDelay = 20 / portTICK_PERIOD_MS; // default is 100Hz i.e. 10ms
+    //// Initialise the xLastWakeTime variable with the current time.
+    //xLastWakeTime = xTaskGetTickCount ();
+    //vTaskDelayUntil( &xLastWakeTime, xDelay );
 
     // notify changed value
     if (deviceConnected && newDataADXL) {
