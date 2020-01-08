@@ -7,11 +7,14 @@ The Arduino library is precompiled.  The sdkconfig file used for the compilation
 
 The BLE server uses Neil Kolban's library;  Accerometer measurement uses a modified version of the SparkADXL345 library
 
-Output values are:
-ahvMax - maximum frequency-weighted acceleration for xyz axes for nMeasure in cms-2
+Output values (in order of transmission in data packet):
 ahv - RMS frequency-weighted acceleration over integration period in cms-2.  Integration period set by nMeasureADXL, e.g. 1s
-a8 - Total exposure to vibration since last reset in mms-2
 Battery voltage in mV
+a8 - Total exposure to vibration since last reset in mms-2
+ahvMax - maximum frequency-weighted acceleration for xyz axes for nMeasure in cms-2
+ahv - RMS frequency-weighted acceleration over integration period in cms-2 (repeat)
+
+ahv is repeated:  the first value maps to the BPM field and is used by many apps; the second value will appear in any app that makes use of RRs
 No timing data are reported; we use the timestamp from the BLE client.  Could add the timestamp to the data packet from the BLE server
 
 
@@ -579,7 +582,8 @@ void measureVibrationTest( void * pvParameters ){
 	uint32_t isrCount = 0, isrTime = 0;
 
 	for (;;) {// wait til tick
-		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
 			portENTER_CRITICAL(&timerMux);
 			isrCount = isrCounter;
 			isrTime = lastIsrAt;
@@ -845,10 +849,10 @@ void BLEComms(void * pvParameters ) {
 			two byte cumulative ahvi in 2nd RR field
 			two byte battery voltage in 3rd RR field
 			*/
-			
+			uint16_t unScaled = ((ahvInteger * 1000) >> 10); // divide by 1.024
 			dataPacket[0] = 0b00010111;
-			dataPacket[1] = ahvInteger & 0x00ff;
-			dataPacket[2] = ahvInteger >> 8;
+			dataPacket[1] = unScaled & 0x00ff;
+			dataPacket[2] = unScaled >> 8;
 			dataPacket[3] = batteryVoltage & 0x00ff;
 			dataPacket[4] = batteryVoltage >> 8;
 			dataPacket[5] = a8RideInteger & 0x00ff;
