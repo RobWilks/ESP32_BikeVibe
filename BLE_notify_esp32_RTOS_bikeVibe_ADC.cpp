@@ -89,7 +89,7 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
-#define USE_SER 1
+#define USE_SER 0
 #define TEST_PORT 1 // used to test timing of the core ADXL read loop
 
 RTC_DATA_ATTR int bootCount = 0; // logs number of times rebooted
@@ -217,7 +217,11 @@ void IRAM_ATTR onTimer(){
 	
 	
 	// Give a semaphore that we can check in the loop
-	xSemaphoreGiveFromISR(timerSemaphore, NULL);
+	//xSemaphoreGiveFromISR(timerSemaphore, NULL);
+	
+	xTaskNotifyFromISR(&vibeTask);
+	
+	
 	// It is safe to use digitalRead/Write here if you want to toggle an output
 	//#if TEST_PORT
 	//digitalWrite(signalPin, ISRmonitor);
@@ -538,12 +542,12 @@ void setup(){
 
 	////////////////////////////////////// init timer //////////////////////////////////////////
 
-	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
 
 	
 	
-	//disableCore0WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
+	disableCore1WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
 	// see epic thread https://github.com/espressif/arduino-esp32/issues/595
+	// needed else main measurement task is blocked, so that it synchronises with alternate ticks
 	
 	//create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
 	xTaskCreatePinnedToCore(
@@ -582,10 +586,11 @@ void loop()
 void measureVibrationTest( void * pvParameters ){
 	
 	uint32_t isrCount = 0, isrTime = 0;
-
+	
 	for (;;) {// wait til tick
 		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
 		if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+
 			portENTER_CRITICAL(&timerMux);
 			isrCount = isrCounter;
 			isrTime = lastIsrAt;
@@ -630,9 +635,13 @@ void measureVibration( void * pvParameters ){
 	double ahvRMS; // RMS frequency-weighted acceleration over integration period
 	double a8Ride = 0; // total exposure to vibration since last reset
 
+	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
+	delay(1);
+
 
 	for (;;) {// wait til tick
-		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		xTaskNotifyWait(); {
 			portENTER_CRITICAL(&timerMux);
 			uint32_t isrCount = isrCounter;
 			uint32_t isrTime = lastIsrAt;
