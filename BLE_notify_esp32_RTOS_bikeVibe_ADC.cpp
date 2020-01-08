@@ -84,6 +84,7 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define SENSORS_GRAVITY_STANDARD          (SENSORS_GRAVITY_EARTH)
 #define TWOPI (2. * PI)
 #define METRES_TO_FEET (3.2808) // not used
+#define BPM_CENTIMETRE (100.0) // BPM values are reported in cms-2
 #define RR_CENTIMETRE (102.4) // RR values are converted 1LSB = 1/1024ms
 #define RR_MILLIMETRE (1024)
 #define SIMULATE 0
@@ -137,6 +138,7 @@ volatile bool shutDown = false;
 const uint32_t nMeasureADXL = 1000; // number of ticks before pass to BLE server
 const uint32_t nMeasureADC = 30000; // number of ticks before pass to BLE server
 volatile uint16_t ahvInteger; // exposure data
+volatile uint16_t ahvIntegerScaled; // exposure data reported as RR value
 volatile uint16_t a8RideInteger; // cumulative exposure data
 volatile uint16_t maxAhvInteger; // max exposure
 volatile uint32_t batteryVoltage; // battery voltage measured with ADC (Vin not regulator voltage)
@@ -597,6 +599,7 @@ void measureVibrationTest( void * pvParameters ){
 				batteryVoltage = isrCount;
 				maxAhvInteger = isrTime;
 				ahvInteger = 100;
+				ahvIntegerScaled = 102;
 				newDataADXL = true;
 			}
 			// Print it
@@ -680,13 +683,15 @@ void measureVibration( void * pvParameters ){
 				if (ahvRMS > 0.06)
 				{
 					sumRide += sum; // sum ahvi^2 for whole ride
-					ahvInteger = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+					ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+					ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
 					maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
 					lastTimeNonZero = count;
 				}
 				else // consider the measurement is noise
 				{
 					ahvInteger = 0;
+					ahvIntegerScaled = 0;
 					maxAhvInteger = 0;
 					if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for a period
 					{
@@ -849,18 +854,17 @@ void BLEComms(void * pvParameters ) {
 			two byte cumulative ahvi in 2nd RR field
 			two byte battery voltage in 3rd RR field
 			*/
-			uint16_t unScaled = ((ahvInteger * 1000) >> 10); // divide by 1.024
 			dataPacket[0] = 0b00010111;
-			dataPacket[1] = unScaled & 0x00ff;
-			dataPacket[2] = unScaled >> 8;
+			dataPacket[1] = ahvInteger & 0x00ff;
+			dataPacket[2] = ahvInteger >> 8;
 			dataPacket[3] = batteryVoltage & 0x00ff;
 			dataPacket[4] = batteryVoltage >> 8;
 			dataPacket[5] = a8RideInteger & 0x00ff;
 			dataPacket[6] = a8RideInteger >> 8;
 			dataPacket[7] = maxAhvInteger & 0x00ff;
 			dataPacket[8] = maxAhvInteger >> 8;
-			dataPacket[9] = ahvInteger & 0x00ff;
-			dataPacket[10] = ahvInteger >> 8;
+			dataPacket[9] = ahvIntegerScaled & 0x00ff;
+			dataPacket[10] = ahvIntegerScaled >> 8;
 
 			pCharacteristic->setValue(dataPacket, 11);
 			pCharacteristic->notify();
