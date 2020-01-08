@@ -91,6 +91,8 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define SIZE_BUFF 49
 #define USE_SER 0
 #define TEST_PORT 1 // used to test timing of the core ADXL read loop
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  30        /* Time ESP32 will go to sleep (in seconds) */
 
 RTC_DATA_ATTR int bootCount = 0; // logs number of times rebooted
 
@@ -217,9 +219,11 @@ void IRAM_ATTR onTimer(){
 	
 	
 	// Give a semaphore that we can check in the loop
-	//xSemaphoreGiveFromISR(timerSemaphore, NULL);
+	xSemaphoreGiveFromISR(timerSemaphore, NULL);
 	
-	xTaskNotifyFromISR(&vibeTask);
+	//BaseType_t xHigherPriorityTaskWoken;
+	//xHigherPriorityTaskWoken = pdFALSE;	
+	//xTaskNotifyFromISR(&vibeTask, 0, eNoAction, &xHigherPriorityTaskWoken);
 	
 	
 	// It is safe to use digitalRead/Write here if you want to toggle an output
@@ -433,7 +437,8 @@ void enterDeepSleep()
 	
 	esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
-	
+	esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // added to test timer init problem
+
 	/*
 	Next we decide what all peripherals to shut down/keep on
 	By default, ESP32 will automatically power down the peripherals
@@ -636,129 +641,143 @@ void measureVibration( void * pvParameters ){
 	double a8Ride = 0; // total exposure to vibration since last reset
 
 	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
-	delay(1);
+	delay(50);
+	xSemaphoreTake(timerSemaphore, portMAX_DELAY);
+	while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
 
 
 	for (;;) {// wait til tick
-		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
-		xTaskNotifyWait(); {
-			portENTER_CRITICAL(&timerMux);
-			uint32_t isrCount = isrCounter;
-			uint32_t isrTime = lastIsrAt;
-			portEXIT_CRITICAL(&timerMux);
-			#if TEST_PORT
-			digitalWrite(signalPin, HIGH);
+		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		uint32_t ulInterruptStatus;
+
+		/* Block indefinitely (without a timeout, so no need to check the function's
+		return value) to wait for a notification.  NOTE!  Real applications
+		should not block indefinitely, but instead time out occasionally in order
+		to handle error conditions that may prevent the interrupt from sending
+		any more notifications. */
+		//xTaskNotifyWait( 0x00,               /* Don't clear any bits on entry. */
+		//ULONG_MAX,          /* Clear all bits on exit. */
+		//&ulInterruptStatus, /* Receives the notification value. */
+		//portMAX_DELAY );    /* Block indefinitely. */
+
+		
+		portENTER_CRITICAL(&timerMux);
+		uint32_t isrCount = isrCounter;
+		uint32_t isrTime = lastIsrAt;
+		portEXIT_CRITICAL(&timerMux);
+		#if TEST_PORT
+		digitalWrite(signalPin, HIGH);
+		#endif
+		uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
+		#if SIMULATE
+		calcAcc(count, (int16_t *)buff);
+		#else
+		adxl.readAcc((int16_t *)buff);
+		#endif //simulate
+		calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
+		if (count < 2) {
+			for (uint8_t j = 0; j < 3; j++) {
+				for (uint8_t k = 1; k < 4; k++) {
+					filteredValues[j][count][k] = filteredValues[j][count][0];
+				}
+			}
+			} else {
+			applyFilter(filterCoeffs, filteredValues, lastValue);
+		}
+		++count;
+		// calculate rms values and ahvSquared
+		
+		// omit first few readings to allow infinite impulse filter to settle
+		if (count > nOmit)
+		{
+			double result = 0; // temporary result to allow calculation of maximum ahv
+			for (uint8_t i = 0; i < 3; i++) {
+				result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+			}
+			sum += result;
+			// measure max
+			if (maxAhvSquared < result)
+			{
+				maxAhvSquared = result;
+			}
+			
+		}
+
+		if (count > nextCount)
+		{
+			nextCount = count + nMeasureADXL;
+			// calculate contribution to daily exposure according to ISO5349
+			ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+			if (ahvRMS > 0.06)
+			{
+				sumRide += sum; // sum ahvi^2 for whole ride
+				ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+				ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+				maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+				lastTimeNonZero = count;
+			}
+			else // consider the measurement is noise
+			{
+				ahvInteger = 0;
+				ahvIntegerScaled = 0;
+				maxAhvInteger = 0;
+				if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for a period
+				{
+					#if TEST_PORT
+					digitalWrite(signalPin, LOW); // ensure output ports released before sleep
+					pinMode(signalPin, INPUT);
+					pinMode(gndPin, INPUT);
+					#endif
+					#if USE_SER
+					Serial.println("Shutting down ADXL measurement task");
+					#endif
+					shutDown = true;
+					vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
+					while(true) {}; // do nothing while waiting for task to end
+				}
+			}
+			a8Ride = sqrtf(sumRide * tickPeriod / time0);
+			a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
+			// the result is in mm/s/s
+			newDataADXL = true;
+			sum = 0;
+			maxAhvSquared = 0;
+			#if USE_SER
+			sprintf(data, "Time = %i, ahvRMS = %e, a8Ride = %e\n", millis(), ahvRMS, a8Ride);
+			Serial.print(data);
 			#endif
-			uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
-			#if SIMULATE
-			calcAcc(count, (int16_t *)buff);
-			#else
-			adxl.readAcc((int16_t *)buff);
-			#endif //simulate
-			calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
-			if (count < 2) {
-				for (uint8_t j = 0; j < 3; j++) {
-					for (uint8_t k = 1; k < 4; k++) {
-						filteredValues[j][count][k] = filteredValues[j][count][0];
-					}
-				}
-				} else {
-				applyFilter(filterCoeffs, filteredValues, lastValue);
-			}
-			++count;
-			// calculate rms values and ahvSquared
-			
-			// omit first few readings to allow infinite impulse filter to settle
-			if (count > nOmit)
-			{
-				double result = 0; // temporary result to allow calculation of maximum ahv
-				for (uint8_t i = 0; i < 3; i++) {
-					result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-				}
-				sum += result;
-				// measure max
-				if (maxAhvSquared < result)
-				{
-					maxAhvSquared = result;
-				}
-				
-			}
+		}
 
-			if (count > nextCount)
+		if (count > nextADC)
+		{
+			// measure battery voltage
+			// probably need an average
+			batteryVoltage = 0;
+			for (uint16_t i = 0; i < 64; i++ )
 			{
-				nextCount = count + nMeasureADXL;
-				// calculate contribution to daily exposure according to ISO5349
-				ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-				if (ahvRMS > 0.06)
-				{
-					sumRide += sum; // sum ahvi^2 for whole ride
-					ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-					ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-					maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-					lastTimeNonZero = count;
-				}
-				else // consider the measurement is noise
-				{
-					ahvInteger = 0;
-					ahvIntegerScaled = 0;
-					maxAhvInteger = 0;
-					if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for a period
-					{
-						#if TEST_PORT
-						digitalWrite(signalPin, LOW); // ensure output ports released before sleep
-						pinMode(signalPin, INPUT);
-						pinMode(gndPin, INPUT);
-						#endif
-						#if USE_SER
-						Serial.println("Shutting down ADXL measurement task");
-						#endif
-						shutDown = true;
-						vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
-						while(true) {}; // do nothing while waiting for task to end
-					}
-				}
-				a8Ride = sqrtf(sumRide * tickPeriod / time0);
-				a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-				// the result is in mm/s/s
-				newDataADXL = true;
-				sum = 0;
-				maxAhvSquared = 0;
-				#if USE_SER
-				sprintf(data, "Time = %i, ahvRMS = %e, a8Ride = %e\n", millis(), ahvRMS, a8Ride);
-				Serial.print(data);
-				#endif
+				batteryVoltage += (uint32_t)readADC();
 			}
-
-			if (count > nextADC)
-			{
-				// measure battery voltage
-				// probably need an average
-				batteryVoltage = 0;
-				for (uint16_t i = 0; i < 64; i++ )
-				{
-					batteryVoltage += (uint32_t)readADC();
-				}
-				nextADC = count + nMeasureADC;
-				newDataADC = true;
-				batteryVoltage *= 163L;
-				batteryVoltage >>= 12L;
-				batteryVoltage += 320L;
-				// from calibration
-				#if USE_SER
-				sprintf(data, "\nBattery = %i V\n", batteryVoltage);
-				Serial.print(data);
-				#endif
-			}
-
-			
-			
-			// Could sleep til next tick
-			#if TEST_PORT
-			digitalWrite(signalPin, LOW);
+			nextADC = count + nMeasureADC;
+			newDataADC = true;
+			batteryVoltage *= 163L;
+			batteryVoltage >>= 12L;
+			batteryVoltage += 320L;
+			// from calibration
+			#if USE_SER
+			sprintf(data, "\nBattery = %i V\n", batteryVoltage);
+			Serial.print(data);
 			#endif
+		}
 
-		}  // end of main for loop
-	}
+		
+		
+		// Could sleep til next tick
+		#if TEST_PORT
+		digitalWrite(signalPin, LOW);
+		#endif
+
+		}  // end of if semaphore
+	}  // end of main for loop
 }  // end of measureVibration task
 
 ////////////////////////////////////// BLEComms //////////////////////////////////////////
