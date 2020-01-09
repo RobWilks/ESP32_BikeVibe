@@ -1,61 +1,42 @@
 /*
 Program to make a high frequency (~1kHz) measurement of vibration (acceleration), filter it using an infinite impulse filter and report it out by a BLE connection. 
 The intended use is to measure cyclist hand-arm vibration; the filter values correspond to the British Standard BS6841 for ocupational exposure
-
 The code was designed to run on a dual core Esp32 with an ADXL345 accelerometer and prototyped on the Esp32 devkit v1. Run BLE server on core 0 and accelerometer measurement on core 1
 The Arduino library is precompiled.  The sdkconfig file used for the compilation pins bluedroid to core 0.  The static and dynamic memory requirements are 76% and 11% respectively
-
 The BLE server uses Neil Kolban's library;  Accerometer measurement uses a modified version of the SparkADXL345 library
-
 The measurements are reported as RR values of a Heart Rate Monitor service, which can then be logged using off-the-shelf mobile phone apps such as HR Log and RideWithGPS, 
 the first logs RR values, the last logs heart rate and location.
 https://www.bluetooth.com/wp-content/uploads/Sitecore-Media-Library/Gatt/Xml/Characteristics/org.bluetooth.characteristic.heart_rate_measurement.xml
 The GATT chacteristics shows RR values are reported as 1LSB = 1/1024th msec.  Output values are multiplied by 1.024.  Clearly this is a cludge.
-
 Output values (in order of transmission in data packet):
 1) ahv - RMS frequency-weighted acceleration over integration period in cms^-2.  Integration period set by nMeasureADXL, e.g. 1s
 2) Battery voltage in mV
 3) a8 - Total exposure to vibration since last reset in mms^-2
 4) ahvMax - maximum frequency-weighted acceleration for xyz axes for nMeasure in cms^-2
 5) ahv - RMS frequency-weighted acceleration over integration period in cms-2 (repeat)
-
 ahv is repeated:  the first value maps to the BPM field and can be read by any HRM app that accepts a 16 bit integer for BPM, e.g. RidewithGPS; the second value will appear in the list of RRs
 There seem to be few android apps that log RRs; I only found HR Log
 No timing data are reported; we use the timestamp from the BLE client.  Could add the timestamp to the data packet from the BLE server
-
-
 Directive 2002/44/EC of European Parliament Council (2002) provides details of the minimum health and safety requirements
 regarding exposure of workers to the risks arising from mechanical vibration.
 The Directive defines exposure limit values for hand-arm vibration based upon a standardized eight hour reference period (simulating a working day).
 The Directive defines the thresholds of hand-arm vibration exposure from which the employer has to control
 (Exposure Action Value, EAV = 2.5 ms^-2 rms) and threshold exposure limits to which workers must not be subjected
 (Exposure Limit Value, ELV = 5.0 ms^-2 rms)
-
 https://www.napier.ac.uk/research-and-innovation/research-search/outputs/cyclist-exposure-to-hand-arm-vibration-and-pavement-surface-improvement-in-the-city-of
 discusses use of bike vibration sensors to characterise roads in Edinburgh
-
 The design of the digital filter is described in:
 Industrial Health 2007, 45, 512–519
 https://www.ncbi.nlm.nih.gov/pubmed/17878622
-
 The double precision variables are only needed for the filter calculation; subsequent calculations of stats could be with single precision.
-
 Scope on signalTestPin shows the duration of each measurement is 400msec with a 80MHz esp32 CPU clock frequency.
-
 If ahv values are zero for timeBeforeSleep sec then the output ports are shutdown and the device enters deep sleep.  The device is woken from deep sleep by movement detected by the accelerometer
-
 In deep sleep current consumption is 12.5 mA when the code is run on the development board Esp DevKit V1. In use current consumption is 50mA
 The board has a USB-UART converter CP2102 which accounts for most of the deep sleep current; ~1mA goes to the power LED
-
 The ADXL345 supports a data rate of up to 3.2KHz i.e. can measure frequencies of up to 1.6KHz.  The SPI clock frequency is set to 4MHz, high enough to support the equivalent rate of data transfer 6 x 8 x 3.2 kbit/s.  See datasheet
 https://www.analog.com/en/products/adxl345.html#
-
 It is set to maximum resolution of 13bit, one of which is the sign bit
-
 The digital filter values are set to values calculated with an R script.  It would be straightforward to incorporate the calculation in this code.  To do!
-
-
-
 */
 
 
@@ -84,14 +65,6 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 
 ////////////////////////////////////// bikeVibe parameters //////////////////////////////////////////
 
-#define ADXL345_MG2G_MULTIPLIER (0.004)  // 4mg per lsb
-#define ADXL345_MG2G_DIVIDER (250)  // 4mg per lsb
-#define ADXL345_MG16G_MULTIPLIER (0.032)  // 32mg per lsb
-#define ADXL345_MG16G_DIVIDER (31.5)  // 32mg per lsb
-#define SENSORS_GRAVITY_EARTH             (9.80665F)              /**< Earth's gravity in m/s^2 */
-#define SENSORS_GRAVITY_MOON              (1.6F)                  /**< The moon's gravity in m/s^2 */
-#define SENSORS_GRAVITY_SUN               (275.0F)                /**< The sun's gravity in m/s^2 */
-#define SENSORS_GRAVITY_STANDARD          (SENSORS_GRAVITY_EARTH)
 #define TWOPI (2. * PI)
 #define BPM_CENTIMETRE (100.0) // BPM values are reported in cms-2
 #define RR_CENTIMETRE (102.4) // RR values are converted 1LSB = 1/1024ms
@@ -207,16 +180,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
 	}
 };
 
-////////////////////////////////////// hw timer functions //////////////////////////////////////////
 
-
-hw_timer_t * timer = NULL;
-volatile SemaphoreHandle_t timerSemaphore;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
-
-//volatile uint32_t isrCounter = 0;
-//volatile uint32_t lastIsrAt = 0;
-volatile bool gotTick = false;
 
 
 
@@ -226,18 +190,25 @@ volatile bool gotTick = false;
 void IRAM_ATTR onTimer(){
 	// Increment the counter and set the time of ISR
 	// These counters are not used in this program
-	//portENTER_CRITICAL_ISR(&timerMux);
-	//isrCounter++;
-	//lastIsrAt = millis();
-	//portEXIT_CRITICAL_ISR(&timerMux);
-	
 	portENTER_CRITICAL_ISR(&timerMux);
-	gotTick = true;
+	isrCounter++;
+	lastIsrAt = millis();
 	portEXIT_CRITICAL_ISR(&timerMux);
 	
-	// Give a semaphore that we can check in the loop
-	//xSemaphoreGiveFromISR(timerSemaphore, NULL);
 	
+	// Give a semaphore that we can check in the loop
+	xSemaphoreGiveFromISR(timerSemaphore, NULL);
+	
+	//BaseType_t xHigherPriorityTaskWoken;
+	//xHigherPriorityTaskWoken = pdFALSE;	
+	//xTaskNotifyFromISR(&vibeTask, 0, eNoAction, &xHigherPriorityTaskWoken);
+	
+	
+	// It is safe to use digitalRead/Write here if you want to toggle an output
+	//#if TEST_PORT
+	//digitalWrite(signalPin, ISRmonitor);
+	//ISRmonitor = !ISRmonitor;
+	//#endif
 
 
 }
@@ -489,13 +460,15 @@ void flash(int nTimes, int ledPinNo)
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 void setup(){
+		flash(3, ledPin);
+
 	// Set the CPU speed
 	setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
 
 	#if USE_SER
 	Serial.begin(115200);
-	#endif
 	delay(5000);
+	#endif
 	pinMode(ledPin, OUTPUT);
 	#if TEST_PORT
 	pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
@@ -516,49 +489,13 @@ void setup(){
 	#endif
 
 
-	// configure accelerometer
 
-	adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
-	byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
-	#if USE_SER
-	Serial.print("intSource = "); Serial.println(intSource, BIN);
-	/*
-	D7      D6      D5      D4
-	DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
-	D3      D2      D1      D0
-	Inactivity  FREE_FALL Watermark Overrun
-	*/
-	#endif
-	adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
-	adxl.powerUp();
 
-	adxl.setRangeSetting(16);           // Give the range settings
-	// Accepted values are 2g, 4g, 8g or 16g
-	// Higher Values = Wider Measurement Range
-	// Lower Values = Greater Sensitivity
-
-	adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
-
-	adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
 	
-	adxl.setRate(1600);
-
-	adxl.getRangeSetting(buff);
-	
-	
-	#if USE_SER
-	Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
-	Serial.print("Data rate ");  Serial.println(adxl.getRate());
-	Serial.print("Range ");  Serial.println(buff[0]);
-	Serial.println("Initialised accelerometer");
-	#endif
-
 	
 	disableCore1WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
 	// see epic thread https://github.com/espressif/arduino-esp32/issues/595
 	// needed else main measurement task is blocked, so that it synchronises with alternate ticks
-
-
 	
 	//create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
 	xTaskCreatePinnedToCore(
@@ -582,7 +519,6 @@ void setup(){
 	0);          /* pin task to core 0 */
 
 	
-	flash(3, ledPin);
 }
 
 ////////////////////////////////////// loop //////////////////////////////////////////
@@ -595,6 +531,48 @@ void loop()
 //measureVibration: measures vibration every 1 ms
 //
 void measureVibration( void * pvParameters ){
+	// hw timer functions
+
+	hw_timer_t * timer = NULL;
+	volatile SemaphoreHandle_t timerSemaphore;
+	portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+
+	volatile uint32_t isrCounter = 0;
+	volatile uint32_t lastIsrAt = 0;
+	// configure accelerometer
+
+	adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
+	byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
+	#if USE_SER
+	Serial.print("intSource = "); Serial.println(intSource, BIN);
+	/*
+	D7      D6      D5      D4
+	DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
+	D3      D2      D1      D0
+	Inactivity  FREE_FALL Watermark Overrun
+	*/
+	#endif
+	adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
+	adxl.powerUp();
+	adxl.setRangeSetting(16);           // Give the range settings
+	// Accepted values are 2g, 4g, 8g or 16g
+	// Higher Values = Wider Measurement Range
+	// Lower Values = Greater Sensitivity
+	adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
+	adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
+	adxl.setRate(1600);
+	adxl.getRangeSetting(buff);
+	
+	
+	#if USE_SER
+	Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
+	Serial.print("Data rate ");  Serial.println(adxl.getRate());
+	Serial.print("Range ");  Serial.println(buff[0]);
+	Serial.println("Initialised accelerometer");
+	#endif
+
+	
+	
 	uint32_t nextCount = nMeasureADXL + nOmit; // count when measurement integration period ends 
 	uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
 	uint32_t count = 0;
@@ -610,18 +588,10 @@ void measureVibration( void * pvParameters ){
 	// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
 
 
-	//xSemaphoreTake(timerSemaphore, portMAX_DELAY);
-	//while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
-		
+	xSemaphoreTake(timerSemaphore, portMAX_DELAY);
+	while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
 	for (;;) {// wait til tick
-		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
-		portENTER_CRITICAL_ISR(&timerMux);
-		bool tick = gotTick;
-		gotTick = false;
-		portEXIT_CRITICAL_ISR(&timerMux);
-		delayMicroseconds(10);
-		
-		if (tick)  {
+		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
 		
 		#if TEST_PORT
 		digitalWrite(signalPin, HIGH);
@@ -743,16 +713,13 @@ void measureVibration( void * pvParameters ){
 ////////////////////////////////////// BLEComms //////////////////////////////////////////
 /*
 Information about the BLE server
-
 Video: https://www.youtube.com/watch?v=oCMOYS71NIU
 Based on Neil Kolban example for IDF: https://github.com/nkolban/esp32-snippets/blob/master/cpp_utils/tests/BLE%20Tests/SampleNotify.cpp
 Ported to Arduino ESP32 by Evandro Copercini
 updated by chegewara
-
 Create a BLE server that, once we receive a connection, will send periodic notifications.
 The service advertises itself as: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
 And has a characteristic of: beb5483e-36e1-4688-b7f5-ea07361b26a8
-
 The design of creating the BLE server is:
 1. Create a BLE Server
 2. Create a BLE Service
@@ -760,10 +727,8 @@ The design of creating the BLE server is:
 4. Create a BLE Descriptor on the characteristic
 5. Start the service.
 6. Start advertising.
-
 A connect hander associated with the server starts a background task that performs notification
 when the newdata flag is set by the measurement task.
-
 */
 
 
