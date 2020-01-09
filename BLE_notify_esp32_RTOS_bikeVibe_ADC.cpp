@@ -1,5 +1,5 @@
 /*
-Program to make a high frequency measurement of vibration (acceleration), filter it using an infinite impulse filter and report it out by a BLE connection. 
+Program to make a high frequency (~1kHz) measurement of vibration (acceleration), filter it using an infinite impulse filter and report it out by a BLE connection. 
 The intended use is to measure cyclist hand-arm vibration; the filter values correspond to the British Standard BS6841 for ocupational exposure
 
 The code was designed to run on a dual core Esp32 with an ADXL345 accelerometer and prototyped on the Esp32 devkit v1. Run BLE server on core 0 and accelerometer measurement on core 1
@@ -7,14 +7,20 @@ The Arduino library is precompiled.  The sdkconfig file used for the compilation
 
 The BLE server uses Neil Kolban's library;  Accerometer measurement uses a modified version of the SparkADXL345 library
 
-Output values (in order of transmission in data packet):
-ahv - RMS frequency-weighted acceleration over integration period in cms-2.  Integration period set by nMeasureADXL, e.g. 1s
-Battery voltage in mV
-a8 - Total exposure to vibration since last reset in mms-2
-ahvMax - maximum frequency-weighted acceleration for xyz axes for nMeasure in cms-2
-ahv - RMS frequency-weighted acceleration over integration period in cms-2 (repeat)
+The measurements are reported as RR values of a Heart Rate Monitor service, which can then be logged using off-the-shelf mobile phone apps such as HR Log and RideWithGPS, 
+the first logs RR values, the last logs heart rate and location.
+https://www.bluetooth.com/wp-content/uploads/Sitecore-Media-Library/Gatt/Xml/Characteristics/org.bluetooth.characteristic.heart_rate_measurement.xml
+The GATT chacteristics shows RR values are reported as 1LSB = 1/1024th msec.  Output values are multiplied by 1.024.  Clearly this is a cludge.
 
-ahv is repeated:  the first value maps to the BPM field and is used by many apps; the second value will appear in any app that makes use of RRs
+Output values (in order of transmission in data packet):
+1) ahv - RMS frequency-weighted acceleration over integration period in cms^-2.  Integration period set by nMeasureADXL, e.g. 1s
+2) Battery voltage in mV
+3) a8 - Total exposure to vibration since last reset in mms^-2
+4) ahvMax - maximum frequency-weighted acceleration for xyz axes for nMeasure in cms^-2
+5) ahv - RMS frequency-weighted acceleration over integration period in cms-2 (repeat)
+
+ahv is repeated:  the first value maps to the BPM field and can be read by any HRM app that accepts a 16 bit integer for BPM, e.g. RidewithGPS; the second value will appear in the list of RRs
+There seem to be few android apps that log RRs; I only found HR Log
 No timing data are reported; we use the timestamp from the BLE client.  Could add the timestamp to the data packet from the BLE server
 
 
@@ -24,11 +30,6 @@ The Directive defines exposure limit values for hand-arm vibration based upon a 
 The Directive defines the thresholds of hand-arm vibration exposure from which the employer has to control
 (Exposure Action Value, EAV = 2.5 ms^-2 rms) and threshold exposure limits to which workers must not be subjected
 (Exposure Limit Value, ELV = 5.0 ms^-2 rms)
-
-The measurements are reported as RR values of a Heart Rate Monitor service, which can then be logged using off-the-shelf mobile phone apps such as HR Log and RideWithGPS, 
-the first logs RR values, the last logs heart rate and location.
-https://www.bluetooth.com/wp-content/uploads/Sitecore-Media-Library/Gatt/Xml/Characteristics/org.bluetooth.characteristic.heart_rate_measurement.xml
-The GATT chacteristics shows RR values are reported as 1LSB = 1/1024th msec.  Output values are multiplied by 1.024.  Clearly this is a cludge.
 
 https://www.napier.ac.uk/research-and-innovation/research-search/outputs/cyclist-exposure-to-hand-arm-vibration-and-pavement-surface-improvement-in-the-city-of
 discusses use of bike vibration sensors to characterise roads in Edinburgh
@@ -44,7 +45,7 @@ Scope on signalTestPin shows the duration of each measurement is 400msec with a 
 If ahv values are zero for timeBeforeSleep sec then the output ports are shutdown and the device enters deep sleep.  The device is woken from deep sleep by movement detected by the accelerometer
 
 In deep sleep current consumption is 12.5 mA when the code is run on the development board Esp DevKit V1. In use current consumption is 50mA
-The board has a USB-UART converter CP2104 which accounts for most of the deep sleep current; ~1mA goes to the power LED
+The board has a USB-UART converter CP2102 which accounts for most of the deep sleep current; ~1mA goes to the power LED
 
 */
 
@@ -89,12 +90,14 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1024)
 #define SIMULATE 0
 #define SIZE_BUFF 49
-#define USE_SER 0
+#define USE_SER 1
 #define TEST_PORT 1 // used to test timing of the core ADXL read loop
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  30        /* Time ESP32 will go to sleep (in seconds) */
+#define SHUTDOWN 1 // enter deep sleep if no movement
 
 RTC_DATA_ATTR int bootCount = 0; // logs number of times rebooted
+// to use the data over reboot, store it into the RTC memory by defining a global variable with RTC_DATA_ATTR attribute
 
 
 
@@ -335,13 +338,13 @@ int readADC()
 	adc2_config_channel_atten( ADC2_CHANNEL_4, ADC_ATTEN_11db );
 
 	esp_err_t r = adc2_get_raw( ADC2_CHANNEL_4, ADC_WIDTH_12Bit, &read_raw);
-	#if USE_SER
-	if ( r == ESP_OK ) {
-		printf("%d, ", read_raw );
-		} else if ( r == ESP_ERR_TIMEOUT ) {
-		printf("ADC2 used by Wi-Fi.\n");
-	}
-	#endif
+	//#if USE_SER
+	//if ( r == ESP_OK ) {
+		//printf("%d, ", read_raw );
+		//} else if ( r == ESP_ERR_TIMEOUT ) {
+		//printf("ADC2 used by Wi-Fi.\n");
+	//}
+	//#endif
 	return(read_raw);
 }
 
@@ -433,7 +436,7 @@ void enterDeepSleep()
 	rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
 	
 	esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF); // power down slow memory on RTC module
-	esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
+	//esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
 	
 	esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
@@ -497,7 +500,6 @@ void setup(){
 	
 	#if USE_SER
 	Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
-	#endif
 
 	
 	//Increment boot number and print it every reboot
@@ -506,6 +508,7 @@ void setup(){
 
 	//Print the wakeup reason for ESP32
 	print_wakeup_reason();
+	#endif
 
 
 	// configure accelerometer
@@ -721,6 +724,7 @@ void measureVibration( void * pvParameters ){
 				ahvInteger = 0;
 				ahvIntegerScaled = 0;
 				maxAhvInteger = 0;
+				#if SHUTDOWN
 				if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for a period
 				{
 					#if TEST_PORT
@@ -735,6 +739,7 @@ void measureVibration( void * pvParameters ){
 					vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
 					while(true) {}; // do nothing while waiting for task to end
 				}
+				#endif
 			}
 			a8Ride = sqrtf(sumRide * tickPeriod / time0);
 			a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
