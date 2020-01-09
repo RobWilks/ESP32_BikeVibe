@@ -214,8 +214,9 @@ hw_timer_t * timer = NULL;
 volatile SemaphoreHandle_t timerSemaphore;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
-volatile uint32_t isrCounter = 0;
-volatile uint32_t lastIsrAt = 0;
+//volatile uint32_t isrCounter = 0;
+//volatile uint32_t lastIsrAt = 0;
+volatile bool gotTick = false;
 
 
 
@@ -225,25 +226,18 @@ volatile uint32_t lastIsrAt = 0;
 void IRAM_ATTR onTimer(){
 	// Increment the counter and set the time of ISR
 	// These counters are not used in this program
+	//portENTER_CRITICAL_ISR(&timerMux);
+	//isrCounter++;
+	//lastIsrAt = millis();
+	//portEXIT_CRITICAL_ISR(&timerMux);
+	
 	portENTER_CRITICAL_ISR(&timerMux);
-	isrCounter++;
-	lastIsrAt = millis();
+	gotTick = true;
 	portEXIT_CRITICAL_ISR(&timerMux);
 	
-	
 	// Give a semaphore that we can check in the loop
-	xSemaphoreGiveFromISR(timerSemaphore, NULL);
+	//xSemaphoreGiveFromISR(timerSemaphore, NULL);
 	
-	//BaseType_t xHigherPriorityTaskWoken;
-	//xHigherPriorityTaskWoken = pdFALSE;	
-	//xTaskNotifyFromISR(&vibeTask, 0, eNoAction, &xHigherPriorityTaskWoken);
-	
-	
-	// It is safe to use digitalRead/Write here if you want to toggle an output
-	//#if TEST_PORT
-	//digitalWrite(signalPin, ISRmonitor);
-	//ISRmonitor = !ISRmonitor;
-	//#endif
 
 
 }
@@ -500,8 +494,8 @@ void setup(){
 
 	#if USE_SER
 	Serial.begin(115200);
-	delay(5000);
 	#endif
+	delay(5000);
 	pinMode(ledPin, OUTPUT);
 	#if TEST_PORT
 	pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
@@ -559,14 +553,12 @@ void setup(){
 	Serial.println("Initialised accelerometer");
 	#endif
 
-	////////////////////////////////////// init timer //////////////////////////////////////////
-
-
-	
 	
 	disableCore1WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
 	// see epic thread https://github.com/espressif/arduino-esp32/issues/595
 	// needed else main measurement task is blocked, so that it synchronises with alternate ticks
+
+
 	
 	//create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
 	xTaskCreatePinnedToCore(
@@ -618,10 +610,18 @@ void measureVibration( void * pvParameters ){
 	// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
 
 
-	xSemaphoreTake(timerSemaphore, portMAX_DELAY);
-	while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
+	//xSemaphoreTake(timerSemaphore, portMAX_DELAY);
+	//while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
+		
 	for (;;) {// wait til tick
-		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
+		portENTER_CRITICAL_ISR(&timerMux);
+		bool tick = gotTick;
+		gotTick = false;
+		portEXIT_CRITICAL_ISR(&timerMux);
+		delayMicroseconds(10);
+		
+		if (tick)  {
 		
 		#if TEST_PORT
 		digitalWrite(signalPin, HIGH);
