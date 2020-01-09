@@ -98,9 +98,9 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1024)
 #define SIMULATE 0 // used to simulate the accelerometer output in order to test the filter response 
 #define SIZE_BUFF 49 // used for serial comms
-#define USE_SER 1
+#define USE_SER 0
 #define TEST_PORT 1 // used to test timing of the core 1 measurement loop
-#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+//#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds used to wake from deep sleep */
 #define TIME_TO_SLEEP  30        /* Time ESP32 will go to sleep (in seconds) */
 #define SHUTDOWN 1 // enter deep sleep if no movement
 
@@ -451,7 +451,7 @@ void enterDeepSleep()
 	
 	esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
-	esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // added to test timer init problem
+	//esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // added to test timer init problem
 
 	/*
 	Next we decide what all peripherals to shut down/keep on
@@ -614,12 +614,12 @@ void measureVibration( void * pvParameters ){
 	double a8Ride = 0; // total exposure to vibration since last reset
 
 	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
-	delay(500); // Added to allow timer to stabilise before entering main measurement loop
+	delay(50); // Added to allow timer to stabilise before entering main measurement loop
 	// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
+
+
 	xSemaphoreTake(timerSemaphore, portMAX_DELAY);
 	while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
-
-
 	for (;;) {// wait til tick
 		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
 		
@@ -643,6 +643,7 @@ void measureVibration( void * pvParameters ){
 			applyFilter(filterCoeffs, filteredValues, lastValue);
 		}
 		++count;
+		
 		// calculate rms values and ahvSquared
 		
 		// omit first few readings to allow infinite impulse filter to settle
@@ -670,7 +671,7 @@ void measureVibration( void * pvParameters ){
 			{
 				sumRide += sum; // sum ahvi^2 for whole ride
 				ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-				ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+				ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2
 				maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
 				lastTimeNonZero = count;
 			}
@@ -694,15 +695,14 @@ void measureVibration( void * pvParameters ){
 					Serial.println("Shutting down ADXL measurement task");
 					#endif
 					shutDown = true;
-					vTaskDelete(NULL);     //Delete own task by passing NULL(TaskHandle_1 can also be used)
+					vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
 					while(true) {}; // do nothing while waiting for task to end
 				}
 				#endif
 			}
 			a8Ride = sqrtf(sumRide * tickPeriod / time0);
-			a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-			// the result is in mm^s-2
-			newDataADXL = true;
+			a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE); // the result is in mm^s-2
+			newDataADXL = true; // flag to BLE comms task that new data are ready
 			sum = 0;
 			maxAhvSquared = 0;
 			#if USE_SER
@@ -732,9 +732,6 @@ void measureVibration( void * pvParameters ){
 			#endif
 		}
 
-		
-		
-		// Could sleep til next tick
 		#if TEST_PORT
 		digitalWrite(signalPin, LOW);
 		#endif
@@ -894,7 +891,7 @@ void BLEComms(void * pvParameters ) {
 		/*
 		the measurement task sets a flag, shutdown, if there is no movement 
 		the test for no movement could equally well be made in this task (BLEcomm)
-		we shutdown the measurement task, deinit BLE and then enter deep sleep; the first two steps are probably not needed
+		we deinit BLE and then enter deep sleep; the first step is probably not needed
 		*/
 		if (shutDown)
 		{
