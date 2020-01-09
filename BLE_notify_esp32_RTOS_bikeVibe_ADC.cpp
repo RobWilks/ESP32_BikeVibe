@@ -47,6 +47,15 @@ If ahv values are zero for timeBeforeSleep sec then the output ports are shutdow
 In deep sleep current consumption is 12.5 mA when the code is run on the development board Esp DevKit V1. In use current consumption is 50mA
 The board has a USB-UART converter CP2102 which accounts for most of the deep sleep current; ~1mA goes to the power LED
 
+The ADXL345 supports a data rate of up to 3.2KHz i.e. can measure frequencies of up to 1.6KHz.  The SPI clock frequency is set to 4MHz, high enough to support the equivalent rate of data transfer 6 x 8 x 3.2 kbit/s.  See datasheet
+https://www.analog.com/en/products/adxl345.html#
+
+It is set to maximum resolution of 13bit, one of which is the sign bit
+
+The digital filter values are set to values calculated with an R script.  It would be straightforward to incorporate the calculation in this code.  To do!
+
+
+
 */
 
 
@@ -84,14 +93,13 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define SENSORS_GRAVITY_SUN               (275.0F)                /**< The sun's gravity in m/s^2 */
 #define SENSORS_GRAVITY_STANDARD          (SENSORS_GRAVITY_EARTH)
 #define TWOPI (2. * PI)
-#define METRES_TO_FEET (3.2808) // not used
 #define BPM_CENTIMETRE (100.0) // BPM values are reported in cms-2
 #define RR_CENTIMETRE (102.4) // RR values are converted 1LSB = 1/1024ms
 #define RR_MILLIMETRE (1024)
-#define SIMULATE 0
-#define SIZE_BUFF 49
+#define SIMULATE 0 // used to simulate the accelerometer output in order to test the filter response 
+#define SIZE_BUFF 49 // used for serial comms
 #define USE_SER 1
-#define TEST_PORT 1 // used to test timing of the core ADXL read loop
+#define TEST_PORT 1 // used to test timing of the core 1 measurement loop
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
 #define TIME_TO_SLEEP  30        /* Time ESP32 will go to sleep (in seconds) */
 #define SHUTDOWN 1 // enter deep sleep if no movement
@@ -128,15 +136,16 @@ const uint32_t maxRuns = 100;
 ADXL345 adxl = ADXL345(SS, spiFrequency);           // USE FOR SPI COMMUNICATION
 
 //configure accelerometer data capture
-const uint32_t nOmit = 128;    // no of early measurements to omit to allow filter to stabilise
+const uint32_t nOmit = 128;    // no of early measurements to omit to allow IIR filter to stabilise
 
 //configure timer
-const uint32_t tickFrequency = 1000;           // 1 ms; the filter coefficients are determined for a particular sampling frequency
+const uint32_t tickFrequency = 1000;           // the filter coefficients are determined for a particular sampling frequency fs
+// IIR filter not stable for fs > 1250Hz
 const double tickPeriod = 1. / (double)tickFrequency;  // used in simulation
 const double time0 = 28800.0;                    // the reference duration of eight hours (28,800s)
-volatile bool timeOut = false;
 volatile bool tick = false;
-volatile bool shutDown = false;
+volatile bool shutDown = false; // flag passed from core 1 to core 0 in shutdown process
+
 
 
 // reporting
@@ -317,12 +326,13 @@ void applyFilter(const double filterCoeffs[3][6], double filteredValues[3][3][4]
 }
 
 ////////////////////////////////////// calcAcc //////////////////////////////////////////
-// for simulation of vibration input
+// for simulation of accelerometer input
 
 void calcAcc(uint32_t dataCount, int16_t * buff )
 {
+	uint32_t runCount = dataCount / nMeasureADXL;
 	//float frequency = pow(10.,(float)runCount / 33.3); //scans from 1 Hz to 1000 Hz in 100 runs
-	float frequency = 10; // peak response in Hz
+	float frequency = 10; // peak response of IIR filter in Hz
 	float t = (float)dataCount * tickPeriod; //in sec
 	uint16_t x = sin(TWOPI * frequency * t) * 8. * ADXL345_MG16G_DIVIDER; // simulate +/- 8g
 	buff[0] = x;
@@ -435,8 +445,8 @@ void enterDeepSleep()
 	rtc_gpio_init(GPIO_NUM_4);
 	rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
 	
-	esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF); // power down slow memory on RTC module
-	//esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
+	//esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF); // power down slow memory on RTC module
+	esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
 	
 	esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
@@ -633,14 +643,14 @@ void measureVibrationTest( void * pvParameters ){
 //measureVibration: measures vibration every 1 ms
 //
 void measureVibration( void * pvParameters ){
-	uint32_t nextCount = nMeasureADXL + nOmit; // determines when data available for BT comm
-	uint32_t nextADC = nMeasureADC; // determines when data available for BT comm
+	uint32_t nextCount = nMeasureADXL + nOmit; // count to signal end of integration period for measurement
+	uint32_t nextADC = nMeasureADC; // count when measure battery voltage
 	uint32_t count = 0;
 	uint32_t lastTimeNonZero = 0;
 	double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
 	double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
-	double sumRide = 0; // sum since last reset
 	double ahvRMS; // RMS frequency-weighted acceleration over integration period
+	double sumRide = 0; // sum since last reset
 	double a8Ride = 0; // total exposure to vibration since last reset
 
 	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
@@ -725,10 +735,13 @@ void measureVibration( void * pvParameters ){
 				ahvIntegerScaled = 0;
 				maxAhvInteger = 0;
 				#if SHUTDOWN
-				if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for a period
+				// shutdown is initiated by the measurement task which sets a flag, powers down the ADXL345 and terminates.  
+				// On receipt of the flag the BLEcomms task shuts down:
+				// the BLE transceiver, the measurement task and finally the esp32
+				if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for timeBeforeSleep msec
 				{
 					#if TEST_PORT
-					digitalWrite(signalPin, LOW); // ensure output ports released before sleep
+					digitalWrite(signalPin, LOW); // ensure output ports released before deep sleep
 					pinMode(signalPin, INPUT);
 					pinMode(gndPin, INPUT);
 					#endif
@@ -743,7 +756,7 @@ void measureVibration( void * pvParameters ){
 			}
 			a8Ride = sqrtf(sumRide * tickPeriod / time0);
 			a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE);
-			// the result is in mm/s/s
+			// the result is in mm^s-2
 			newDataADXL = true;
 			sum = 0;
 			maxAhvSquared = 0;
