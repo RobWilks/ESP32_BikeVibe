@@ -181,7 +181,14 @@ class MyServerCallbacks: public BLEServerCallbacks {
 };
 
 
+////////////////////////////////////// hw timer functions //////////////////////////////////////////
 
+	hw_timer_t * timer = NULL;
+	volatile SemaphoreHandle_t timerSemaphore;
+	portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+
+	volatile uint32_t isrCounter = 0;
+	volatile uint32_t lastIsrAt = 0;
 
 
 ////////////////////////////////////// onTimer //////////////////////////////////////////
@@ -199,16 +206,6 @@ void IRAM_ATTR onTimer(){
 	// Give a semaphore that we can check in the loop
 	xSemaphoreGiveFromISR(timerSemaphore, NULL);
 	
-	//BaseType_t xHigherPriorityTaskWoken;
-	//xHigherPriorityTaskWoken = pdFALSE;	
-	//xTaskNotifyFromISR(&vibeTask, 0, eNoAction, &xHigherPriorityTaskWoken);
-	
-	
-	// It is safe to use digitalRead/Write here if you want to toggle an output
-	//#if TEST_PORT
-	//digitalWrite(signalPin, ISRmonitor);
-	//ISRmonitor = !ISRmonitor;
-	//#endif
 
 
 }
@@ -460,15 +457,15 @@ void flash(int nTimes, int ledPinNo)
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 void setup(){
-		flash(3, ledPin);
+	flash(3, ledPin);
 
 	// Set the CPU speed
 	setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
 
 	#if USE_SER
 	Serial.begin(115200);
-	delay(5000);
 	#endif
+	delay(5000);
 	pinMode(ledPin, OUTPUT);
 	#if TEST_PORT
 	pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
@@ -531,14 +528,7 @@ void loop()
 //measureVibration: measures vibration every 1 ms
 //
 void measureVibration( void * pvParameters ){
-	// hw timer functions
 
-	hw_timer_t * timer = NULL;
-	volatile SemaphoreHandle_t timerSemaphore;
-	portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
-
-	volatile uint32_t isrCounter = 0;
-	volatile uint32_t lastIsrAt = 0;
 	// configure accelerometer
 
 	adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
