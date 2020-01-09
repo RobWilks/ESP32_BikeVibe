@@ -224,6 +224,7 @@ volatile uint32_t lastIsrAt = 0;
 
 void IRAM_ATTR onTimer(){
 	// Increment the counter and set the time of ISR
+	// These counters are not used in this program
 	portENTER_CRITICAL_ISR(&timerMux);
 	isrCounter++;
 	lastIsrAt = millis();
@@ -597,54 +598,13 @@ void loop()
 {
 	// Empty. Things are done in Tasks.
 }
-////////////////////////////////////// measureVibrationTest //////////////////////////////////////////
-//measureVibration: measures vibration every 1 ms
-// to investigate source of delays on core 0
-//
-void measureVibrationTest( void * pvParameters ){
-	
-	uint32_t isrCount = 0, isrTime = 0;
-	
-	for (;;) {// wait til tick
-		//if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
-		if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
-
-			portENTER_CRITICAL(&timerMux);
-			isrCount = isrCounter;
-			isrTime = lastIsrAt;
-			portEXIT_CRITICAL(&timerMux);
-			#if TEST_PORT
-			digitalWrite(signalPin, HIGH);
-			#endif
-			//Read the interrupt count and time
-			if ((isrCount % 1000) == 0)
-			{
-				batteryVoltage = isrCount;
-				maxAhvInteger = isrTime;
-				ahvInteger = 100;
-				ahvIntegerScaled = 102;
-				newDataADXL = true;
-			}
-			// Print it
-			//Serial.print("onTimer no. ");
-			//Serial.print(isrCount);
-			//Serial.print(" at ");
-			//Serial.print(isrTime);
-			//Serial.println(" ms");
-			delayMicroseconds(50);
-			#if TEST_PORT
-			digitalWrite(signalPin, LOW);
-			#endif
-		}
-	}
-}
 
 ////////////////////////////////////// measureVibration //////////////////////////////////////////
 //measureVibration: measures vibration every 1 ms
 //
 void measureVibration( void * pvParameters ){
-	uint32_t nextCount = nMeasureADXL + nOmit; // count to signal end of integration period for measurement
-	uint32_t nextADC = nMeasureADC; // count when measure battery voltage
+	uint32_t nextCount = nMeasureADXL + nOmit; // count when measurement integration period ends 
+	uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
 	uint32_t count = 0;
 	uint32_t lastTimeNonZero = 0;
 	double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
@@ -654,30 +614,15 @@ void measureVibration( void * pvParameters ){
 	double a8Ride = 0; // total exposure to vibration since last reset
 
 	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
-	delay(50);
+	delay(500); // Added to allow timer to stabilise before entering main measurement loop
+	// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
 	xSemaphoreTake(timerSemaphore, portMAX_DELAY);
 	while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
 
 
 	for (;;) {// wait til tick
 		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
-		uint32_t ulInterruptStatus;
-
-		/* Block indefinitely (without a timeout, so no need to check the function's
-		return value) to wait for a notification.  NOTE!  Real applications
-		should not block indefinitely, but instead time out occasionally in order
-		to handle error conditions that may prevent the interrupt from sending
-		any more notifications. */
-		//xTaskNotifyWait( 0x00,               /* Don't clear any bits on entry. */
-		//ULONG_MAX,          /* Clear all bits on exit. */
-		//&ulInterruptStatus, /* Receives the notification value. */
-		//portMAX_DELAY );    /* Block indefinitely. */
-
 		
-		portENTER_CRITICAL(&timerMux);
-		uint32_t isrCount = isrCounter;
-		uint32_t isrTime = lastIsrAt;
-		portEXIT_CRITICAL(&timerMux);
 		#if TEST_PORT
 		digitalWrite(signalPin, HIGH);
 		#endif
