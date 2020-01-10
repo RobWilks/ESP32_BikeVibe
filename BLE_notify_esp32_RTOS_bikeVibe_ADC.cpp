@@ -1,3 +1,8 @@
+/*Begining of Auto generated code by Atmel studio */
+#include <Arduino.h>
+
+/*End of auto generated code by Atmel studio */
+
 /*
 Program to make a high frequency (~1kHz) measurement of vibration (acceleration), filter it using an infinite impulse filter and report it out by a BLE connection. 
 The intended use is to measure cyclist hand-arm vibration; the filter values correspond to the British Standard BS6841 for ocupational exposure
@@ -51,6 +56,18 @@ The digital filter values are set to values calculated with an R script.  It wou
 
 
 #include <SparkFun_ADXL345.h>         // SparkFun ADXL345 Library
+//Beginning of Auto generated function prototypes by Atmel Studio
+void calcAcc(uint32_t dataCount, int16_t buff);
+int readADC();
+void printPower(esp_power_level_t power);
+void print_wakeup_reason();
+void enterDeepSleep();
+void flash(int nTimes, int ledPinNo);
+//void measureVibration(void pvParameters);
+//void BLEComms(void pvParameters);
+//End of Auto generated function prototypes by Atmel Studio
+
+
 
 
 
@@ -65,6 +82,10 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 
 ////////////////////////////////////// bikeVibe parameters //////////////////////////////////////////
 
+#define ADXL345_MG2G_MULTIPLIER (0.004)  // 4mg per lsb
+#define ADXL345_MG2G_DIVIDER (250)  // 4mg per lsb
+#define ADXL345_MG16G_MULTIPLIER (0.032)  // 32mg per lsb
+#define ADXL345_MG16G_DIVIDER (31.5)  // 32mg per lsb
 #define TWOPI (2. * PI)
 #define BPM_CENTIMETRE (100.0) // BPM values are reported in cms-2
 #define RR_CENTIMETRE (102.4) // RR values are converted 1LSB = 1/1024ms
@@ -171,41 +192,41 @@ TaskHandle_t commsTask;
 
 
 class MyServerCallbacks: public BLEServerCallbacks {
-	void onConnect(BLEServer* pServer) {
-		deviceConnected = true;
-	};
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+  };
 
-	void onDisconnect(BLEServer* pServer) {
-		deviceConnected = false;
-	}
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+  }
 };
 
 
 ////////////////////////////////////// hw timer functions //////////////////////////////////////////
 
-	hw_timer_t * timer = NULL;
-	volatile SemaphoreHandle_t timerSemaphore;
-	portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+  hw_timer_t * timer = NULL;
+  volatile SemaphoreHandle_t timerSemaphore;
+  portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
-	volatile uint32_t isrCounter = 0;
-	volatile uint32_t lastIsrAt = 0;
+  volatile uint32_t isrCounter = 0;
+  volatile uint32_t lastIsrAt = 0;
 
 
 ////////////////////////////////////// onTimer //////////////////////////////////////////
 
 
 void IRAM_ATTR onTimer(){
-	// Increment the counter and set the time of ISR
-	// These counters are not used in this program
-	portENTER_CRITICAL_ISR(&timerMux);
-	isrCounter++;
-	lastIsrAt = millis();
-	portEXIT_CRITICAL_ISR(&timerMux);
-	
-	
-	// Give a semaphore that we can check in the loop
-	xSemaphoreGiveFromISR(timerSemaphore, NULL);
-	
+  // Increment the counter and set the time of ISR
+  // These counters are not used in this program
+  portENTER_CRITICAL_ISR(&timerMux);
+  isrCounter++;
+  lastIsrAt = millis();
+  portEXIT_CRITICAL_ISR(&timerMux);
+  
+  
+  // Give a semaphore that we can check in the loop
+  xSemaphoreGiveFromISR(timerSemaphore, NULL);
+  
 
 
 }
@@ -215,23 +236,23 @@ void IRAM_ATTR onTimer(){
 void initTime(uint32_t period)
 // check type for period
 {
-	// Create semaphore to inform us when the timer has fired
-	timerSemaphore = xSemaphoreCreateBinary();
+  // Create semaphore to inform us when the timer has fired
+  timerSemaphore = xSemaphoreCreateBinary();
 
-	// Use 1st timer of 4 (counted from zero).
-	// Set 80 divider for prescaler (see ESP32 Technical Reference Manual for more
-	// info).
-	timer = timerBegin(0, 80, true);
+  // Use 1st timer of 4 (counted from zero).
+  // Set 80 divider for prescaler (see ESP32 Technical Reference Manual for more
+  // info).
+  timer = timerBegin(0, 80, true);
 
-	// Attach onTimer function to our timer.
-	timerAttachInterrupt(timer, &onTimer, true);
+  // Attach onTimer function to our timer.
+  timerAttachInterrupt(timer, &onTimer, true);
 
-	// Set alarm to call onTimer function every second (value in microseconds).
-	// Repeat the alarm (third parameter)
-	timerAlarmWrite(timer, period, true);
+  // Set alarm to call onTimer function every second (value in microseconds).
+  // Repeat the alarm (third parameter)
+  timerAlarmWrite(timer, period, true);
 
-	// Start an alarm
-	timerAlarmEnable(timer);
+  // Start an alarm
+  timerAlarmEnable(timer);
 }
 ////////////////////////////////////// bikeVibe functions //////////////////////////////////////////
 
@@ -239,53 +260,53 @@ double calibrationCoeffs[3][2] = {-10.87728, 26.16823, 8.805525, 27.00157, -26.7
 // measured for sum of 16 readings
 
 double filterCoeffs[3][6] = {
-	//{0.310349844,-0.567696069,0.260868419,0.016714604,0.001761097,-0.014953507}, {41.08403,46.5508,16.78048,26.10383,52.20766,26.10383}, {2.918487,-5.652972,2.74225,2.828427,-5.656854,2.828427} // fs = 900 Hz
-	{0.276879253,-0.511128066,0.236814985,0.013462109,0.001283086,-0.012179023}, {10.221917,0.6697712,1.7615627,3.1633127,6.3266254,3.1633127}, {2.909304,-5.65371,2.750695,2.828427,-5.656854,2.828427}  // fs = 1000 Hz
-	//  {0.2277253333,-0.4261585181,0.1999171031,0.0092696133,0.0007419592,-0.0085276541}, {3.5184959,-5.52018664,2.27502596,0.06833381,0.13666761,0.06833381}, {2.895603,-5.654671,2.763435,2.828427,-5.656854,2.828427}   // fs = 1200 Hz
-	//  {0.2180439689,-0.4091495028,0.192418231,0.0085284104,0.0006563486,-0.0078720618}, {2.919330238,-5.65402299,2.74035527,0.00141563,0.002831259,0.00141563}, {2.892874,-5.654842,2.765993,2.828427,-5.656854,2.828427} // fs = 1250 Hz
-	//  {0.1798093454,-0.3410695507,0.1620194965,0.0058825744,0.0003796456,-0.0055029288}, {1.4815962,-3.9284474,5.9036649,0.8642034,1.7284069,0.8642034}, {2.881991,-5.655457,2.77626,2.828427,-5.656854,2.828427} // fs = 1500 Hz (not stable)
+  //{0.310349844,-0.567696069,0.260868419,0.016714604,0.001761097,-0.014953507}, {41.08403,46.5508,16.78048,26.10383,52.20766,26.10383}, {2.918487,-5.652972,2.74225,2.828427,-5.656854,2.828427} // fs = 900 Hz
+  {0.276879253,-0.511128066,0.236814985,0.013462109,0.001283086,-0.012179023}, {10.221917,0.6697712,1.7615627,3.1633127,6.3266254,3.1633127}, {2.909304,-5.65371,2.750695,2.828427,-5.656854,2.828427}  // fs = 1000 Hz
+  //  {0.2277253333,-0.4261585181,0.1999171031,0.0092696133,0.0007419592,-0.0085276541}, {3.5184959,-5.52018664,2.27502596,0.06833381,0.13666761,0.06833381}, {2.895603,-5.654671,2.763435,2.828427,-5.656854,2.828427}   // fs = 1200 Hz
+  //  {0.2180439689,-0.4091495028,0.192418231,0.0085284104,0.0006563486,-0.0078720618}, {2.919330238,-5.65402299,2.74035527,0.00141563,0.002831259,0.00141563}, {2.892874,-5.654842,2.765993,2.828427,-5.656854,2.828427} // fs = 1250 Hz
+  //  {0.1798093454,-0.3410695507,0.1620194965,0.0058825744,0.0003796456,-0.0055029288}, {1.4815962,-3.9284474,5.9036649,0.8642034,1.7284069,0.8642034}, {2.881991,-5.655457,2.77626,2.828427,-5.656854,2.828427} // fs = 1500 Hz (not stable)
 }; // [Hw,Hl,Hh][a0,a1,a2,b0,b1,b2]
 // can scale these values by a fixed factor without change to the calculation
 
 double filteredValues[3][3][4] = {
-	
-	
-	{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
-	{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
-	{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}
-	
+  
+  
+  {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
+  {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}},
+  {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}
+  
 };
 // [rows][columns] [x,y,z][buffer index][aa,bb,cc,dd] HwHlHh converts successively from aa->dd
 
 ////////////////////////////////////// calibrate accelerometer measurements //////////////////////////////////////////
 void calibrate(double coeffs[3][2], double calibratedValues[3][3][4], int16_t * measurements, uint8_t last) {
-	uint8_t i;
-	for (i = 0; i < 3; i++) {
-		calibratedValues[i][last][0] = ((double)(measurements[i]) - coeffs[i][0]) / coeffs[i][1];
-	}
+  uint8_t i;
+  for (i = 0; i < 3; i++) {
+    calibratedValues[i][last][0] = ((double)(measurements[i]) - coeffs[i][0]) / coeffs[i][1];
+  }
 }
 
 
 ////////////////////////////////////// applyFilter //////////////////////////////////////////
 void applyFilter(const double filterCoeffs[3][6], double filteredValues[3][3][4], uint8_t lastValue) {
-	uint8_t i, j, k;
-	for (i = 0; i < 3; i++) {   // over x, y, z
-		for (j = 0; j < 3; j++) { // over Hw, Hl, Hh
-			double result = 0;
-			uint8_t l = lastValue;
-			for (k = 0; k < 3; k++) { // over cyclic buffer
-				result += filterCoeffs[j][k + 3] * filteredValues[i][l][j];
-				if (k != 0)
-				result -= filterCoeffs[j][k] * filteredValues[i][l][j + 1];
-				if (l == 0) {
-					l = 2;
-					} else {
-					--l;
-				}
-			}
-			filteredValues[i][lastValue][j + 1] = result / filterCoeffs[j][0];
-		}
-	}
+  uint8_t i, j, k;
+  for (i = 0; i < 3; i++) {   // over x, y, z
+    for (j = 0; j < 3; j++) { // over Hw, Hl, Hh
+      double result = 0;
+      uint8_t l = lastValue;
+      for (k = 0; k < 3; k++) { // over cyclic buffer
+        result += filterCoeffs[j][k + 3] * filteredValues[i][l][j];
+        if (k != 0)
+        result -= filterCoeffs[j][k] * filteredValues[i][l][j + 1];
+        if (l == 0) {
+          l = 2;
+          } else {
+          --l;
+        }
+      }
+      filteredValues[i][lastValue][j + 1] = result / filterCoeffs[j][0];
+    }
+  }
 }
 
 ////////////////////////////////////// calcAcc //////////////////////////////////////////
@@ -293,67 +314,67 @@ void applyFilter(const double filterCoeffs[3][6], double filteredValues[3][3][4]
 
 void calcAcc(uint32_t dataCount, int16_t * buff )
 {
-	uint32_t runCount = dataCount / nMeasureADXL;
-	//float frequency = pow(10.,(float)runCount / 33.3); //scans from 1 Hz to 1000 Hz in 100 runs
-	float frequency = 10; // peak response of IIR filter in Hz
-	float t = (float)dataCount * tickPeriod; //in sec
-	uint16_t x = sin(TWOPI * frequency * t) * 8. * ADXL345_MG16G_DIVIDER; // simulate +/- 8g
-	buff[0] = x;
-	buff[1] = x;
-	buff[2] = x;
+  uint32_t runCount = dataCount / nMeasureADXL;
+  //float frequency = pow(10.,(float)runCount / 33.3); //scans from 1 Hz to 1000 Hz in 100 runs
+  float frequency = 10; // peak response of IIR filter in Hz
+  float t = (float)dataCount * tickPeriod; //in sec
+  uint16_t x = sin(TWOPI * frequency * t) * 8. * ADXL345_MG16G_DIVIDER; // simulate +/- 8g
+  buff[0] = x;
+  buff[1] = x;
+  buff[2] = x;
 }
 
 
 ////////////////////////////////////// readADC //////////////////////////////////////////
 int readADC()
 {
-	int read_raw;
-	adc2_config_channel_atten( ADC2_CHANNEL_4, ADC_ATTEN_11db );
+  int read_raw;
+  adc2_config_channel_atten( ADC2_CHANNEL_4, ADC_ATTEN_11db );
 
-	esp_err_t r = adc2_get_raw( ADC2_CHANNEL_4, ADC_WIDTH_12Bit, &read_raw);
-	//#if USE_SER
-	//if ( r == ESP_OK ) {
-		//printf("%d, ", read_raw );
-		//} else if ( r == ESP_ERR_TIMEOUT ) {
-		//printf("ADC2 used by Wi-Fi.\n");
-	//}
-	//#endif
-	return(read_raw);
+  esp_err_t r = adc2_get_raw( ADC2_CHANNEL_4, ADC_WIDTH_12Bit, &read_raw);
+  //#if USE_SER
+  //if ( r == ESP_OK ) {
+    //printf("%d, ", read_raw );
+    //} else if ( r == ESP_ERR_TIMEOUT ) {
+    //printf("ADC2 used by Wi-Fi.\n");
+  //}
+  //#endif
+  return(read_raw);
 }
 
 ////////////////////////////////////// printPower //////////////////////////////////////////
 void printPower(esp_power_level_t power)
 {
-	#if USE_SER
-	switch (power)   {
-		case ESP_PWR_LVL_N12:
-		Serial.println("Power set to N12");
-		break;
-		case ESP_PWR_LVL_N9:
-		Serial.println("Power set to N9");
-		break;
-		case ESP_PWR_LVL_N6:
-		Serial.println("Power set to N6");
-		break;
-		case ESP_PWR_LVL_N3:
-		Serial.println("Power set to N3");
-		break;
-		case ESP_PWR_LVL_N0:
-		Serial.println("Power set to N0");
-		break;
-		case ESP_PWR_LVL_P3:
-		Serial.println("Power set to P3");
-		break;
-		case ESP_PWR_LVL_P6:
-		Serial.println("Power set to P6");
-		break;
-		case ESP_PWR_LVL_P9:
-		Serial.println("Power set to P9");
-		break;
-		default:
-		Serial.println("default");
-	}
-	#endif
+  #if USE_SER
+  switch (power)   {
+    case ESP_PWR_LVL_N12:
+    Serial.println("Power set to N12");
+    break;
+    case ESP_PWR_LVL_N9:
+    Serial.println("Power set to N9");
+    break;
+    case ESP_PWR_LVL_N6:
+    Serial.println("Power set to N6");
+    break;
+    case ESP_PWR_LVL_N3:
+    Serial.println("Power set to N3");
+    break;
+    case ESP_PWR_LVL_N0:
+    Serial.println("Power set to N0");
+    break;
+    case ESP_PWR_LVL_P3:
+    Serial.println("Power set to P3");
+    break;
+    case ESP_PWR_LVL_P6:
+    Serial.println("Power set to P6");
+    break;
+    case ESP_PWR_LVL_P9:
+    Serial.println("Power set to P9");
+    break;
+    default:
+    Serial.println("default");
+  }
+  #endif
 }
 
 ////////////////////////////////////// print_wakeup_reason //////////////////////////////////////////
@@ -362,166 +383,166 @@ Method to print the reason by which ESP32
 has been awaken from sleep
 */
 void print_wakeup_reason(){
-	esp_sleep_wakeup_cause_t wakeup_reason;
+  esp_sleep_wakeup_cause_t wakeup_reason;
 
-	wakeup_reason = esp_sleep_get_wakeup_cause();
-	#if USE_SER
+  wakeup_reason = esp_sleep_get_wakeup_cause();
+  #if USE_SER
 
 
-	switch(wakeup_reason)
-	{
-		case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
-		case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
-		case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
-		case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
-		case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
-		default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
-	}
-	#endif
+  switch(wakeup_reason)
+  {
+    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
+    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
+    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
+    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
+    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+  }
+  #endif
 }
 ////////////////////////////////////// enterDeepSleep //////////////////////////////////////////
 
 void enterDeepSleep()
 {
-	adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
-	adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
-	adxl.setActivityAC(1);
-	adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
-	// Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
-	// This library may have a problem using INT2 pin. Default to INT1 pin.
-	adxl.ActivityINT(1);
-	#if USE_SER
-	Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
-	#endif
-	adxl.sleep();
-	
-	
-	#if USE_SER
-	Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
-	#endif
-	
-	
-	/*
-	configure the wake up source as RTC GPIO 4; connect INT1 from ADXL345 to this pin
-	*/
-	
-	rtc_gpio_init(GPIO_NUM_4);
-	rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
-	
-	//esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF); // power down slow memory on RTC module
-	esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
-	
-	esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
+  adxl.setActivityXYZ(1, 1, 1);            // Set to activate movement detection in the axes "adxl.setActivityXYZ(X, Y, Z);" (1 == ON, 0 == OFF)
+  adxl.setActivityThreshold(4);          // 62.5mg per increment   // Set activity   // Inactivity thresholds (0-255) // 16 = 1g
+  adxl.setActivityAC(1);
+  adxl.setImportantInterruptMapping(0, 0, 0, 1, 0); // Sets "adxl.setEveryInterruptMapping(single tap, double tap, free fall, activity, inactivity);"
+  // Accepts only 1 or 2 values for pins INT1 and INT2. This chooses the pin on the ADXL345 to use for Interrupts.
+  // This library may have a problem using INT2 pin. Default to INT1 pin.
+  adxl.ActivityINT(1);
+  #if USE_SER
+  Serial.print("isInterruptEnabled = "); Serial.println(adxl.isInterruptEnabled(ADXL345_INT_ACTIVITY_BIT));
+  #endif
+  adxl.sleep();
+  
+  
+  #if USE_SER
+  Serial.println("accelerometer in sleep mode.  Move to wake.  Reading INT1 on GPIO ");
+  #endif
+  
+  
+  /*
+  configure the wake up source as RTC GPIO 4; connect INT1 from ADXL345 to this pin
+  */
+  
+  rtc_gpio_init(GPIO_NUM_4);
+  rtc_gpio_set_direction(GPIO_NUM_4, RTC_GPIO_MODE_INPUT_ONLY);
+  
+  //esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_SLOW_MEM, ESP_PD_OPTION_OFF); // power down slow memory on RTC module
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_FAST_MEM, ESP_PD_OPTION_OFF); // power down fast memory on RTC module
+  
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_4, 1); //1 = High, 0 = Low
 
-	//esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // added to test timer init problem
+  //esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR); // added to test timer init problem
 
-	/*
-	Next we decide what all peripherals to shut down/keep on
-	By default, ESP32 will automatically power down the peripherals
-	not needed by the wakeup source, but if you want to be a poweruser
-	this is for you. Read in detail at the API docs
-	http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
-	Left the line commented as an example of how to configure peripherals.
-	The line below turns off all RTC peripherals in deep sleep.
-	*/
-	//esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
-	//Serial.println("Configured all RTC Peripherals to be powered down in sleep");
-	
-	/*
-	Now that we have setup a wake cause and if needed setup the
-	peripherals state in deep sleep, we can now start going to
-	deep sleep.
-	In the case that no wake up sources were provided but deep
-	sleep was started, it will sleep forever unless hardware
-	reset occurs.
-	*/
-	#if USE_SER
-	Serial.println("Going to sleep now");
-	Serial.flush();
-	#endif
-	esp_deep_sleep_start();
+  /*
+  Next we decide what all peripherals to shut down/keep on
+  By default, ESP32 will automatically power down the peripherals
+  not needed by the wakeup source, but if you want to be a poweruser
+  this is for you. Read in detail at the API docs
+  http://esp-idf.readthedocs.io/en/latest/api-reference/system/deep_sleep.html
+  Left the line commented as an example of how to configure peripherals.
+  The line below turns off all RTC peripherals in deep sleep.
+  */
+  //esp_deep_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_OFF);
+  //Serial.println("Configured all RTC Peripherals to be powered down in sleep");
+  
+  /*
+  Now that we have setup a wake cause and if needed setup the
+  peripherals state in deep sleep, we can now start going to
+  deep sleep.
+  In the case that no wake up sources were provided but deep
+  sleep was started, it will sleep forever unless hardware
+  reset occurs.
+  */
+  #if USE_SER
+  Serial.println("Going to sleep now");
+  Serial.flush();
+  #endif
+  esp_deep_sleep_start();
 }
 
 ////////////////////////////////////// flash //////////////////////////////////////////
 void flash(int nTimes, int ledPinNo)
 {
-	for (int i = 0; i <= nTimes; i++)
-	{
-		digitalWrite(ledPinNo, HIGH);
-		delay(50);
-		digitalWrite(ledPinNo, LOW);
-		delay(200);
-	}
+  for (int i = 0; i <= nTimes; i++)
+  {
+    digitalWrite(ledPinNo, HIGH);
+    delay(50);
+    digitalWrite(ledPinNo, LOW);
+    delay(200);
+  }
 }
 
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 void setup(){
-	flash(3, ledPin);
+  flash(3, ledPin);
 
-	// Set the CPU speed
-	setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
+  // Set the CPU speed
+  setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
 
-	#if USE_SER
-	Serial.begin(115200);
-	#endif
-	delay(5000);
-	pinMode(ledPin, OUTPUT);
-	#if TEST_PORT
-	pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
-	pinMode(gndPin, OUTPUT); //used as ground for test probe
-	digitalWrite(gndPin, LOW); //
-	#endif
-	
-	#if USE_SER
-	Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
+  #if USE_SER
+  Serial.begin(115200);
+  #endif
+  delay(5000);
+  pinMode(ledPin, OUTPUT);
+  #if TEST_PORT
+  pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
+  pinMode(gndPin, OUTPUT); //used as ground for test probe
+  digitalWrite(gndPin, LOW); //
+  #endif
+  
+  #if USE_SER
+  Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
 
-	
-	//Increment boot number and print it every reboot
-	++bootCount;
-	Serial.println("Boot number: " + String(bootCount));
+  
+  //Increment boot number and print it every reboot
+  ++bootCount;
+  Serial.println("Boot number: " + String(bootCount));
 
-	//Print the wakeup reason for ESP32
-	print_wakeup_reason();
-	#endif
-
-
+  //Print the wakeup reason for ESP32
+  print_wakeup_reason();
+  #endif
 
 
-	
-	
-	disableCore1WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
-	// see epic thread https://github.com/espressif/arduino-esp32/issues/595
-	// needed else main measurement task is blocked, so that it synchronises with alternate ticks
-	
-	//create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
-	xTaskCreatePinnedToCore(
-	measureVibration,   /* Task function. */
-	"vibeTask",     /* name of task. */
-	10000,       /* Stack size of task */
-	NULL,        /* parameter of the task */
-	1,           /* priority of the task */
-	&vibeTask,      /* Task handle to keep track of created task */
-	1);          /* pin task to core 1 */
 
-	
-	//create a task that will be executed in the BLEComms() function, with priority 1 and executed on core 0
-	xTaskCreatePinnedToCore(
-	BLEComms,   /* Task function. */
-	"commsTask",     /* name of task. */
-	28800,       /* Stack size of task */
-	NULL,        /* parameter of the task */
-	2,           /* priority of the task */
-	&commsTask,      /* Task handle to keep track of created task */
-	0);          /* pin task to core 0 */
 
-	
+  
+  
+  disableCore1WDT(); // source https://github.com/espressif/arduino-esp32/blob/master/cores/esp32/esp32-hal.h#L76-L91
+  // see epic thread https://github.com/espressif/arduino-esp32/issues/595
+  // needed else main measurement task is blocked, so that it synchronises with alternate ticks
+  
+  //create a task that will be executed in the measureVibration() function, with priority 2 and executed on core 1
+  xTaskCreatePinnedToCore(
+  measureVibration,   /* Task function. */
+  "vibeTask",     /* name of task. */
+  10000,       /* Stack size of task */
+  NULL,        /* parameter of the task */
+  1,           /* priority of the task */
+  &vibeTask,      /* Task handle to keep track of created task */
+  1);          /* pin task to core 1 */
+
+  
+  //create a task that will be executed in the BLEComms() function, with priority 1 and executed on core 0
+  xTaskCreatePinnedToCore(
+  BLEComms,   /* Task function. */
+  "commsTask",     /* name of task. */
+  28800,       /* Stack size of task */
+  NULL,        /* parameter of the task */
+  2,           /* priority of the task */
+  &commsTask,      /* Task handle to keep track of created task */
+  0);          /* pin task to core 0 */
+
+  
 }
 
 ////////////////////////////////////// loop //////////////////////////////////////////
 void loop()
 {
-	// Empty. Things are done in Tasks.
+  // Empty. Things are done in Tasks.
 }
 
 ////////////////////////////////////// measureVibration //////////////////////////////////////////
@@ -529,175 +550,177 @@ void loop()
 //
 void measureVibration( void * pvParameters ){
 
-	// configure accelerometer
+  // configure accelerometer
 
-	adxl.ActivityINT(0); // accelerometer state might be interrupt from sleep
-	byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
-	#if USE_SER
-	Serial.print("intSource = "); Serial.println(intSource, BIN);
-	/*
-	D7      D6      D5      D4
-	DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
-	D3      D2      D1      D0
-	Inactivity  FREE_FALL Watermark Overrun
-	*/
-	#endif
-	adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
-	adxl.powerUp();
-	adxl.setRangeSetting(16);           // Give the range settings
-	// Accepted values are 2g, 4g, 8g or 16g
-	// Higher Values = Wider Measurement Range
-	// Lower Values = Greater Sensitivity
-	adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
-	adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
-	adxl.setRate(1600);
-	adxl.getRangeSetting(buff);
-	
-	
-	#if USE_SER
-	Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
-	Serial.print("Data rate ");  Serial.println(adxl.getRate());
-	Serial.print("Range ");  Serial.println(buff[0]);
-	Serial.println("Initialised accelerometer");
-	#endif
+  adxl.ActivityINT(0); // accelerometer set to activity-based interrupt when esp32 triggered out of deep sleep so disable it
+  byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
+  #if USE_SER
+  Serial.print("intSource = "); Serial.println(intSource, BIN);
+  /*
+  D7      D6      D5      D4
+  DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
+  D3      D2      D1      D0
+  Inactivity  FREE_FALL Watermark Overrun
+  */
+  #endif
+  adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
+  adxl.powerUp();
+  adxl.setRangeSetting(16);           // Give the range settings
+  // Accepted values are 2g, 4g, 8g or 16g
+  // Higher Values = Wider Measurement Range
+  // Lower Values = Greater Sensitivity
+  adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
+  adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
+  adxl.setRate(1600);
+  adxl.getRangeSetting(buff);
+  
+  
+  #if USE_SER
+  Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
+  Serial.print("Data rate ");  Serial.println(adxl.getRate());
+  Serial.print("Range ");  Serial.println(buff[0]);
+  Serial.println("Initialised accelerometer");
+  #endif
 
-	
-	
-	uint32_t nextCount = nMeasureADXL + nOmit; // count when measurement integration period ends 
-	uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
-	uint32_t count = 0;
-	uint32_t lastTimeNonZero = 0;
-	double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
-	double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
-	double ahvRMS; // RMS frequency-weighted acceleration over integration period
-	double sumRide = 0; // sum since last reset
-	double a8Ride = 0; // total exposure to vibration since last reset
+  
+  
+  uint32_t nextCount = nMeasureADXL + nOmit; // count when measurement integration period ends 
+  uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
+  uint32_t count = 0;
+  uint32_t lastTimeNonZero = 0;
+  double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
+  double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
+  double ahvRMS; // RMS frequency-weighted acceleration over integration period
+  double sumRide = 0; // sum since last reset
+  double a8Ride = 0; // total exposure to vibration since last reset
 
-	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
-	delay(50); // Added to allow timer to stabilise before entering main measurement loop
-	// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
+// initialise timer
+  initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
+  delay(50); // Added to allow timer to stabilise before entering main measurement loop
+  // bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
 
 
-	xSemaphoreTake(timerSemaphore, portMAX_DELAY);
-	while (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdFALSE) {;;} // wait for semaphore
-	for (;;) {// wait til tick
-		if (xSemaphoreTake(timerSemaphore, portMAX_DELAY) == pdTRUE) {
-		
-		#if TEST_PORT
-		digitalWrite(signalPin, HIGH);
-		#endif
-		uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
-		#if SIMULATE
-		calcAcc(count, (int16_t *)buff);
-		#else
-		adxl.readAcc((int16_t *)buff);
-		#endif //simulate
-		calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
-		if (count < 2) {
-			for (uint8_t j = 0; j < 3; j++) {
-				for (uint8_t k = 1; k < 4; k++) {
-					filteredValues[j][count][k] = filteredValues[j][count][0];
-				}
-			}
-			} else {
-			applyFilter(filterCoeffs, filteredValues, lastValue);
-		}
-		++count;
-		
-		// calculate rms values and ahvSquared
-		
-		// omit first few readings to allow infinite impulse filter to settle
-		if (count > nOmit)
-		{
-			double result = 0; // temporary result to allow calculation of maximum ahv
-			for (uint8_t i = 0; i < 3; i++) {
-				result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-			}
-			sum += result;
-			// measure max
-			if (maxAhvSquared < result)
-			{
-				maxAhvSquared = result;
-			}
-			
-		}
+  xSemaphoreTake(timerSemaphore, 0);
+  while (xSemaphoreTake(timerSemaphore, 0) == pdFALSE) {;;} // wait for semaphore
+  for (;;) {// wait til tick
+    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+    
+    #if TEST_PORT
+    digitalWrite(signalPin, HIGH);
+    #endif
+    uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
+    #if SIMULATE
+    calcAcc(count, (int16_t *)buff);
+    #else
+    adxl.readAcc((int16_t *)buff);
+    #endif //simulate
+    calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
+    if (count < 2) {
+      for (uint8_t j = 0; j < 3; j++) {
+        for (uint8_t k = 1; k < 4; k++) {
+          filteredValues[j][count][k] = filteredValues[j][count][0];
+        }
+      }
+      } else {
+      applyFilter(filterCoeffs, filteredValues, lastValue);
+    }
+    ++count;
+    
+    // calculate rms values and ahvSquared
+    
+    // omit first few readings to allow infinite impulse filter to settle
+    if (count > nOmit)
+    {
+      double result = 0; // temporary result to allow calculation of maximum ahv
+      for (uint8_t i = 0; i < 3; i++) {
+        result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+      }
+      sum += result;
+      // measure max
+      if (maxAhvSquared < result)
+      {
+        maxAhvSquared = result;
+      }
+      
+    }
 
-		if (count > nextCount)
-		{
-			nextCount = count + nMeasureADXL;
-			// calculate contribution to daily exposure according to ISO5349
-			ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-			if (ahvRMS > 0.06)
-			{
-				sumRide += sum; // sum ahvi^2 for whole ride
-				ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-				ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2
-				maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-				lastTimeNonZero = count;
-			}
-			else // consider the measurement is noise
-			{
-				ahvInteger = 0;
-				ahvIntegerScaled = 0;
-				maxAhvInteger = 0;
-				#if SHUTDOWN
-				// shutdown is initiated by the measurement task which sets a flag, powers down the ADXL345 and terminates.  
-				// On receipt of the flag the BLEcomms task shuts down:
-				// the BLE transceiver, the measurement task and finally the esp32
-				if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for timeBeforeSleep msec
-				{
-					#if TEST_PORT
-					digitalWrite(signalPin, LOW); // ensure output ports released before deep sleep
-					pinMode(signalPin, INPUT);
-					pinMode(gndPin, INPUT);
-					#endif
-					#if USE_SER
-					Serial.println("Shutting down ADXL measurement task");
-					#endif
-					shutDown = true;
-					vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
-					while(true) {}; // do nothing while waiting for task to end
-				}
-				#endif
-			}
-			a8Ride = sqrtf(sumRide * tickPeriod / time0);
-			a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE); // the result is in mm^s-2
-			newDataADXL = true; // flag to BLE comms task that new data are ready
-			sum = 0;
-			maxAhvSquared = 0;
-			#if USE_SER
-			sprintf(data, "Time = %i, ahvRMS = %e, a8Ride = %e\n", millis(), ahvRMS, a8Ride);
-			Serial.print(data);
-			#endif
-		}
+    if (count > nextCount)
+    {
+      nextCount = count + nMeasureADXL;
+      // calculate contribution to daily exposure according to ISO5349
+      ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+      if (ahvRMS > 0.06)
+      {
+        sumRide += sum; // sum ahvi^2 for whole ride
+        ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+        ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2
+        maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+        lastTimeNonZero = count;
+      }
+      else // consider the measurement is noise
+      {
+        ahvInteger = 0;
+        ahvIntegerScaled = 0;
+        maxAhvInteger = 0;
+        #if SHUTDOWN
+        // shutdown is initiated by the measurement task which sets a flag, powers down the ADXL345 and terminates.  
+        // On receipt of the flag the BLEcomms task shuts down:
+        // the BLE transceiver, the measurement task and finally the esp32
+        if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for timeBeforeSleep msec
+        {
+          #if TEST_PORT
+          digitalWrite(signalPin, LOW); // ensure output ports released before deep sleep
+          pinMode(signalPin, INPUT);
+          pinMode(gndPin, INPUT);
+          #endif
+          #if USE_SER
+          Serial.println("Shutting down ADXL measurement task");
+          #endif
+          shutDown = true;
+          vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
+          while(true) {}; // do nothing while waiting for task to end
+        }
+        #endif
+      }
+      a8Ride = sqrtf(sumRide * tickPeriod / time0);
+      a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE); // the result is in mm^s-2
+      newDataADXL = true; // flag to BLE comms task that new data are ready
+      sum = 0;
+      maxAhvSquared = 0;
+      #if USE_SER
+      sprintf(data, "Time = %i, ahvRMS = %e, a8Ride = %e\n", millis(), ahvRMS, a8Ride);
+      Serial.print(data);
+      #endif
+    }
 
-		if (count > nextADC)
-		{
-			// measure battery voltage
-			// probably need an average
-			batteryVoltage = 0;
-			for (uint16_t i = 0; i < 64; i++ )
-			{
-				batteryVoltage += (uint32_t)readADC();
-			}
-			nextADC = count + nMeasureADC;
-			newDataADC = true;
-			batteryVoltage *= 163L;
-			batteryVoltage >>= 12L;
-			batteryVoltage += 320L;
-			// from calibration
-			#if USE_SER
-			sprintf(data, "\nBattery = %i V\n", batteryVoltage);
-			Serial.print(data);
-			#endif
-		}
+    if (count > nextADC)
+    {
+      // measure battery voltage
+      // probably need an average
+      batteryVoltage = 0;
+      for (uint16_t i = 0; i < 64; i++ )
+      {
+        batteryVoltage += (uint32_t)readADC();
+      }
+      nextADC = count + nMeasureADC;
+      newDataADC = true;
+      batteryVoltage *= 163L;
+      batteryVoltage >>= 12L;
+      batteryVoltage += 320L;
+      // from calibration
+      #if USE_SER
+      sprintf(data, "\nBattery = %i V\n", batteryVoltage);
+      Serial.print(data);
+      #endif
+    }
 
-		#if TEST_PORT
-		digitalWrite(signalPin, LOW);
-		#endif
+    #if TEST_PORT
+    digitalWrite(signalPin, LOW);
+    #endif
 
-		}  // end of if semaphore
-	}  // end of main for loop
+    }  // end of if semaphore
+  delayMicroseconds(10);
+  }  // end of main for loop
 }  // end of measureVibration task
 
 ////////////////////////////////////// BLEComms //////////////////////////////////////////
@@ -723,147 +746,147 @@ when the newdata flag is set by the measurement task.
 
 
 void BLEComms(void * pvParameters ) {
-	
-	// Create the BLE Device
-	BLEDevice::init("ESP32");
+  
+  // Create the BLE Device
+  BLEDevice::init("ESP32");
 
-	// Create the BLE Server
-	pServer = BLEDevice::createServer();
-	pServer->setCallbacks(new MyServerCallbacks());
+  // Create the BLE Server
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
 
-	// Create the BLE Service
-	BLEService *pService = pServer->createService(SERVICE_UUID);
+  // Create the BLE Service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
 
-	// Create a BLE Characteristic
-	pCharacteristic = pService->createCharacteristic(
-	CHARACTERISTIC_UUID,
-	BLECharacteristic::PROPERTY_READ   |
-	BLECharacteristic::PROPERTY_WRITE  |
-	BLECharacteristic::PROPERTY_NOTIFY |
-	BLECharacteristic::PROPERTY_INDICATE
-	);
+  // Create a BLE Characteristic
+  pCharacteristic = pService->createCharacteristic(
+  CHARACTERISTIC_UUID,
+  BLECharacteristic::PROPERTY_READ   |
+  BLECharacteristic::PROPERTY_WRITE  |
+  BLECharacteristic::PROPERTY_NOTIFY |
+  BLECharacteristic::PROPERTY_INDICATE
+  );
 
-	// https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
-	// Create a BLE Descriptor
-	pCharacteristic->addDescriptor(new BLE2902());
+  // https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
+  // Create a BLE Descriptor
+  pCharacteristic->addDescriptor(new BLE2902());
 
-	// Start the service
-	pService->start();
+  // Start the service
+  pService->start();
 
-	// Start advertising
-	BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-	pAdvertising->addServiceUUID(SERVICE_UUID);
-	pAdvertising->setScanResponse(false);
-	pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
-	BLEDevice::startAdvertising();
-	#if USE_SER
-	//delay(5000); // added by rjw so as to start serial client
-	Serial.println("Waiting a client connection to notify...");
-	#endif
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+  BLEDevice::startAdvertising();
+  #if USE_SER
+  //delay(5000); // added by rjw so as to start serial client
+  Serial.println("Waiting a client connection to notify...");
+  #endif
 
-	//set advertising power
-	/*
-	The power level can be one of:
-	ESP_PWR_LVL_N12
-	ESP_PWR_LVL_N9
-	ESP_PWR_LVL_N6
-	ESP_PWR_LVL_N3
-	ESP_PWR_LVL_N0
-	ESP_PWR_LVL_P3
-	ESP_PWR_LVL_P6
-	ESP_PWR_LVL_P9
-	*/
-	if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
-	{
-		#if USE_SER
-		Serial.println("Advertising power changed");
-		#endif
-	}
-	esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
-	printPower(powerAdv);
-	
-	
-	while(true)
-	{
-		
-		// notify changed value
-		if (deviceConnected && newDataADXL) {
-			/*
-			most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
-			https://www.bluetooth.com/specifications/gatt/characteristics/
-			send: instantaneous ahvi as one byte in BPM field
-			cumulative ahvi as two bytes in energy field
-			two byte instantaneous ahvi in 1st RR field
-			two byte cumulative ahvi in 2nd RR field
-			two byte battery voltage in 3rd RR field
-			*/
-			dataPacket[0] = 0b00010111;
-			dataPacket[1] = ahvInteger & 0x00ff;
-			dataPacket[2] = ahvInteger >> 8;
-			dataPacket[3] = batteryVoltage & 0x00ff;
-			dataPacket[4] = batteryVoltage >> 8;
-			dataPacket[5] = a8RideInteger & 0x00ff;
-			dataPacket[6] = a8RideInteger >> 8;
-			dataPacket[7] = maxAhvInteger & 0x00ff;
-			dataPacket[8] = maxAhvInteger >> 8;
-			dataPacket[9] = ahvIntegerScaled & 0x00ff;
-			dataPacket[10] = ahvIntegerScaled >> 8;
+  //set advertising power
+  /*
+  The power level can be one of:
+  ESP_PWR_LVL_N12
+  ESP_PWR_LVL_N9
+  ESP_PWR_LVL_N6
+  ESP_PWR_LVL_N3
+  ESP_PWR_LVL_N0
+  ESP_PWR_LVL_P3
+  ESP_PWR_LVL_P6
+  ESP_PWR_LVL_P9
+  */
+  if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV,ESP_PWR_LVL_N0) == OK)
+  {
+    #if USE_SER
+    Serial.println("Advertising power changed");
+    #endif
+  }
+  esp_power_level_t powerAdv = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_ADV);
+  printPower(powerAdv);
+  
+  
+  while(true)
+  {
+    
+    // notify changed value
+    if (deviceConnected && newDataADXL) {
+      /*
+      most OTS BLE Android apps only accept 1 byte HRM data, although the 0x2a37 characteristic also supports 2 bytes
+      https://www.bluetooth.com/specifications/gatt/characteristics/
+      send: instantaneous ahvi as one byte in BPM field
+      cumulative ahvi as two bytes in energy field
+      two byte instantaneous ahvi in 1st RR field
+      two byte cumulative ahvi in 2nd RR field
+      two byte battery voltage in 3rd RR field
+      */
+      dataPacket[0] = 0b00010111;
+      dataPacket[1] = ahvInteger & 0x00ff;
+      dataPacket[2] = ahvInteger >> 8;
+      dataPacket[3] = batteryVoltage & 0x00ff;
+      dataPacket[4] = batteryVoltage >> 8;
+      dataPacket[5] = a8RideInteger & 0x00ff;
+      dataPacket[6] = a8RideInteger >> 8;
+      dataPacket[7] = maxAhvInteger & 0x00ff;
+      dataPacket[8] = maxAhvInteger >> 8;
+      dataPacket[9] = ahvIntegerScaled & 0x00ff;
+      dataPacket[10] = ahvIntegerScaled >> 8;
 
-			pCharacteristic->setValue(dataPacket, 11);
-			pCharacteristic->notify();
-			newDataADXL = false;
-			digitalWrite(ledPin, HIGH);
-			timeLedOff = millis() + timeLedOn; //msec
-			ledOn = true;
-		}
-		// disconnecting
-		if (!deviceConnected && oldDeviceConnected) {
-			delay(500); // give the bluetooth stack the chance to get things ready
-			pServer->startAdvertising(); // restart advertising
-			#if USE_SER
-			Serial.println("start advertising");
-			#endif
-			oldDeviceConnected = deviceConnected;
-		}
-		// connecting
-		if (deviceConnected && !oldDeviceConnected) {
-			
-			if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
-			{
-				#if USE_SER
-				Serial.println("Connecting power changed");
-				#endif
-			}
-			esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
-			printPower(powerConn);
+      pCharacteristic->setValue(dataPacket, 11);
+      pCharacteristic->notify();
+      newDataADXL = false;
+      digitalWrite(ledPin, HIGH);
+      timeLedOff = millis() + timeLedOn; //msec
+      ledOn = true;
+    }
+    // disconnecting
+    if (!deviceConnected && oldDeviceConnected) {
+      delay(500); // give the bluetooth stack the chance to get things ready
+      pServer->startAdvertising(); // restart advertising
+      #if USE_SER
+      Serial.println("start advertising");
+      #endif
+      oldDeviceConnected = deviceConnected;
+    }
+    // connecting
+    if (deviceConnected && !oldDeviceConnected) {
+      
+      if (esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_CONN_HDL0, ESP_PWR_LVL_N0) == OK)
+      {
+        #if USE_SER
+        Serial.println("Connecting power changed");
+        #endif
+      }
+      esp_power_level_t powerConn = esp_ble_tx_power_get(ESP_BLE_PWR_TYPE_CONN_HDL0);
+      printPower(powerConn);
 
-			
-			#if USE_SER
-			Serial.println("connected");
-			#endif
-			oldDeviceConnected = deviceConnected;
-		}
-		/*
-		the measurement task sets a flag, shutdown, if there is no movement 
-		the test for no movement could equally well be made in this task (BLEcomm)
-		we deinit BLE and then enter deep sleep; the first step is probably not needed
-		*/
-		if (shutDown)
-		{
-			BLEDevice::deinit(true);
-			flash(5, ledPin);
-			pinMode(ledPin, INPUT);
-			enterDeepSleep();
-		}
-		if (ledOn)
-		{
-			if (millis() > timeLedOff)
-			{
-				digitalWrite(ledPin, LOW);
-				ledOn = false;
-			}
+      
+      #if USE_SER
+      Serial.println("connected");
+      #endif
+      oldDeviceConnected = deviceConnected;
+    }
+    /*
+    the measurement task sets a flag, shutdown, if there is no movement 
+    the test for no movement could equally well be made in this task (BLEcomm)
+    we deinit BLE and then enter deep sleep; the first step is probably not needed
+    */
+    if (shutDown)
+    {
+      BLEDevice::deinit(true);
+      flash(5, ledPin);
+      pinMode(ledPin, INPUT);
+      enterDeepSleep();
+    }
+    if (ledOn)
+    {
+      if (millis() > timeLedOff)
+      {
+        digitalWrite(ledPin, LOW);
+        ledOn = false;
+      }
 
-		}
-		vTaskDelay(2); // needed to avoid triggering error from task WDT
-	} // end of main while loop
+    }
+    vTaskDelay(2); // needed to avoid triggering error from task WDT
+  } // end of main while loop
 }
