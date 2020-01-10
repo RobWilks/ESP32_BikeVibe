@@ -505,8 +505,8 @@ void setup(){
   
   #if USE_SER
   Serial.begin(115200);
+  delay(1000);
   #endif
-  delay(5000);
   
   #if USE_SER
   Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
@@ -604,29 +604,24 @@ void measureVibration( void * pvParameters ){
 	uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
 	uint32_t count = 0;
 	uint32_t lastTimeNonZero = 0;
-	uint32_t lastTick = millis();
-	
+
+
 	double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
 	double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
 	double ahvRMS; // RMS frequency-weighted acceleration over integration period
 	double sumRide = 0; // sum since last reset
 	double a8Ride = 0; // total exposure to vibration since last reset
 
-	//// initialise timer
-	//initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
-	//delay(50); // Added to allow timer to stabilise before entering main measurement loop
-	//// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
-	//
-	//
-	//xSemaphoreTake(timerSemaphore, 0);
-	//while (xSemaphoreTake(timerSemaphore, 0) == pdFALSE) {;;} // wait for semaphore
-	//for (;;) {// wait til tick
-	//if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+	// initialise timer
+	initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
+	delay(50); // Added to allow timer to stabilise before entering main measurement loop
+	// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
 	
+	
+	xSemaphoreTake(timerSemaphore, 0);
+	while (xSemaphoreTake(timerSemaphore, 0) == pdFALSE) {;;} // wait for semaphore
 	for (;;) {// wait til tick
-		uint32_t getMillis = millis();
-		if (getMillis != lastTick) {
-			lastTick = getMillis;
+	if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
 			
 			#if TEST_PORT
 			digitalWrite(signalPin, HIGH);
