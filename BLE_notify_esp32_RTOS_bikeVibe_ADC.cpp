@@ -92,7 +92,7 @@ void applyFilter(double filterCoeffs36, double filteredValues334, uint8_t lastVa
 #define RR_MILLIMETRE (1024)
 #define SIMULATE 0 // used to simulate the accelerometer output in order to test the filter response 
 #define SIZE_BUFF 49 // used for serial comms
-#define USE_SER 0
+#define USE_SER 1
 #define TEST_PORT 1 // used to test timing of the core 1 measurement loop
 //#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds used to wake from deep sleep */
 #define TIME_TO_SLEEP  30        /* Time ESP32 will go to sleep (in seconds) */
@@ -474,25 +474,39 @@ void flash(int nTimes, int ledPinNo)
     delay(200);
   }
 }
+////////////////////////////////////// tasksStatus //////////////////////////////////////////
+static void tasksStatus()
+{
+	UBaseType_t uxArraySize = uxTaskGetNumberOfTasks();
+	TaskStatus_t pxTaskStatusArray[uxArraySize];
+	uint32_t pulTotalRunTime = 0;
 
+	uxTaskGetSystemState(&pxTaskStatusArray[0], uxArraySize, &pulTotalRunTime);
+
+	for(int i=0; i<uxArraySize; i++) {
+		ESP_LOGI(__func__, "[%d]Task %s => stack remaining: %d", i, pxTaskStatusArray[i].pcTaskName, pxTaskStatusArray[i].usStackHighWaterMark);
+	}
+}
 ////////////////////////////////////// setup //////////////////////////////////////////
 
 void setup(){
-  flash(3, ledPin);
 
   // Set the CPU speed
   setCpuFrequencyMhz(80); //Set CPU clock frequency 80, 160, 240; 240 default
 
-  #if USE_SER
-  Serial.begin(115200);
-  #endif
-  delay(5000);
   pinMode(ledPin, OUTPUT);
+  flash(3, ledPin);
+
   #if TEST_PORT
   pinMode(signalPin, OUTPUT); //used to measure speed of adxl345 loop
   pinMode(gndPin, OUTPUT); //used as ground for test probe
   digitalWrite(gndPin, LOW); //
   #endif
+  
+  #if USE_SER
+  Serial.begin(115200);
+  #endif
+  delay(5000);
   
   #if USE_SER
   Serial.print("CPU frequency = "); Serial.println(getCpuFrequencyMhz());
@@ -714,12 +728,20 @@ void measureVibration( void * pvParameters ){
       #endif
     }
 
+	if ((count % 3000) == 0)
+	{
+		tasksStatus();
+	}
+
+
+
+
     #if TEST_PORT
     digitalWrite(signalPin, LOW);
     #endif
 
     }  // end of if semaphore
-  delayMicroseconds(10);
+	delayMicroseconds(10);
   }  // end of main for loop
 }  // end of measureVibration task
 
