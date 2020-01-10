@@ -535,7 +535,7 @@ void setup(){
   "vibeTask",     /* name of task. */
   10000,       /* Stack size of task */
   NULL,        /* parameter of the task */
-  1,           /* priority of the task */
+  2,           /* priority of the task */
   &vibeTask,      /* Task handle to keep track of created task */
   1);          /* pin task to core 1 */
 
@@ -546,17 +546,19 @@ void setup(){
   "commsTask",     /* name of task. */
   28800,       /* Stack size of task */
   NULL,        /* parameter of the task */
-  2,           /* priority of the task */
+  1,           /* priority of the task */
   &commsTask,      /* Task handle to keep track of created task */
   0);          /* pin task to core 0 */
 
-  
+  vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
+
 }
 
 ////////////////////////////////////// loop //////////////////////////////////////////
 void loop()
 {
   // Empty. Things are done in Tasks.
+  vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
 }
 
 ////////////////////////////////////// measureVibration //////////////////////////////////////////
