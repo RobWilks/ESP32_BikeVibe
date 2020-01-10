@@ -564,185 +564,192 @@ void loop()
 //
 void measureVibration( void * pvParameters ){
 
-  // configure accelerometer
+	// configure accelerometer
 
-  adxl.ActivityINT(0); // accelerometer set to activity-based interrupt when esp32 triggered out of deep sleep so disable it
-  byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
-  #if USE_SER
-  Serial.print("intSource = "); Serial.println(intSource, BIN);
-  /*
-  D7      D6      D5      D4
-  DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
-  D3      D2      D1      D0
-  Inactivity  FREE_FALL Watermark Overrun
-  */
-  #endif
-  adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
-  adxl.powerUp();
-  adxl.setRangeSetting(16);           // Give the range settings
-  // Accepted values are 2g, 4g, 8g or 16g
-  // Higher Values = Wider Measurement Range
-  // Lower Values = Greater Sensitivity
-  adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
-  adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
-  adxl.setRate(1600);
-  adxl.getRangeSetting(buff);
-  
-  
-  #if USE_SER
-  Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
-  Serial.print("Data rate ");  Serial.println(adxl.getRate());
-  Serial.print("Range ");  Serial.println(buff[0]);
-  Serial.println("Initialised accelerometer");
-  #endif
+	adxl.ActivityINT(0); // accelerometer set to activity-based interrupt when esp32 triggered out of deep sleep so disable it
+	byte intSource = adxl.getInterruptSource(); // to ensure INT1 is low
+	#if USE_SER
+	Serial.print("intSource = "); Serial.println(intSource, BIN);
+	/*
+	D7      D6      D5      D4
+	DATA_READY  SINGLE_TAP  DOUBLE_TAP  Activity
+	D3      D2      D1      D0
+	Inactivity  FREE_FALL Watermark Overrun
+	*/
+	#endif
+	adxl.standBy();  // cycle measure bit in power control register in order to discard noisy measurements
+	adxl.powerUp();
+	adxl.setRangeSetting(16);           // Give the range settings
+	// Accepted values are 2g, 4g, 8g or 16g
+	// Higher Values = Wider Measurement Range
+	// Lower Values = Greater Sensitivity
+	adxl.setSpiBit(0);                  // Configure the device to be in 4 wire SPI mode when set to '0' or 3 wire SPI mode when set to 1
+	adxl.setFullResBit(1);        // 4mg/lsb is the resolution for all ranges
+	adxl.setRate(1600);
+	adxl.getRangeSetting(buff);
+	
+	
+	#if USE_SER
+	Serial.print("Full res bit ");  Serial.println(adxl.getFullResBit());
+	Serial.print("Data rate ");  Serial.println(adxl.getRate());
+	Serial.print("Range ");  Serial.println(buff[0]);
+	Serial.println("Initialised accelerometer");
+	#endif
 
-  
-  
-  uint32_t nextCount = nMeasureADXL + nOmit; // count when measurement integration period ends 
-  uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
-  uint32_t count = 0;
-  uint32_t lastTimeNonZero = 0;
-  double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
-  double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
-  double ahvRMS; // RMS frequency-weighted acceleration over integration period
-  double sumRide = 0; // sum since last reset
-  double a8Ride = 0; // total exposure to vibration since last reset
+	
+	
+	uint32_t nextCount = nMeasureADXL + nOmit; // count when measurement integration period ends
+	uint32_t nextADC = nMeasureADC; // count when battery voltage is measured
+	uint32_t count = 0;
+	uint32_t lastTimeNonZero = 0;
+	uint32_t lastTick = millis();
+	
+	double sum = 0; // sum of frequency-weighted acceleration for xyz axes for nMeasure
+	double maxAhvSquared = 0; // maximum frequency-weighted acceleration for xyz axes for nMeasure
+	double ahvRMS; // RMS frequency-weighted acceleration over integration period
+	double sumRide = 0; // sum since last reset
+	double a8Ride = 0; // total exposure to vibration since last reset
 
-// initialise timer
-  initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
-  delay(50); // Added to allow timer to stabilise before entering main measurement loop
-  // bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
+	//// initialise timer
+	//initTime(1000000L / tickFrequency); // Configure timer - period in microseconds
+	//delay(50); // Added to allow timer to stabilise before entering main measurement loop
+	//// bug where get two sequential measurements when code operates after flash.  Cleared by cycling power off/on
+	//
+	//
+	//xSemaphoreTake(timerSemaphore, 0);
+	//while (xSemaphoreTake(timerSemaphore, 0) == pdFALSE) {;;} // wait for semaphore
+	//for (;;) {// wait til tick
+	//if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
+	
+	for (;;) {// wait til tick
+		uint32_t getMillis = millis();
+		if (getMillis != lastTick) {
+			lastTick = getMillis;
+			
+			#if TEST_PORT
+			digitalWrite(signalPin, HIGH);
+			#endif
+			uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
+			#if SIMULATE
+			calcAcc(count, (int16_t *)buff);
+			#else
+			adxl.readAcc((int16_t *)buff);
+			#endif //simulate
+			calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
+			if (count < 2) {
+				for (uint8_t j = 0; j < 3; j++) {
+					for (uint8_t k = 1; k < 4; k++) {
+						filteredValues[j][count][k] = filteredValues[j][count][0];
+					}
+				}
+				} else {
+				applyFilter(filterCoeffs, filteredValues, lastValue);
+			}
+			++count;
+			
+			// calculate rms values and ahvSquared
+			
+			// omit first few readings to allow infinite impulse filter to settle
+			if (count > nOmit)
+			{
+				double result = 0; // temporary result to allow calculation of maximum ahv
+				for (uint8_t i = 0; i < 3; i++) {
+					result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
+				}
+				sum += result;
+				// measure max
+				if (maxAhvSquared < result)
+				{
+					maxAhvSquared = result;
+				}
+				
+			}
+
+			if (count > nextCount)
+			{
+				nextCount = count + nMeasureADXL;
+				// calculate contribution to daily exposure according to ISO5349
+				ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
+				if (ahvRMS > 0.06)
+				{
+					sumRide += sum; // sum ahvi^2 for whole ride
+					ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
+					ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2
+					maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
+					lastTimeNonZero = count;
+				}
+				else // consider the measurement is noise
+				{
+					ahvInteger = 0;
+					ahvIntegerScaled = 0;
+					maxAhvInteger = 0;
+					#if SHUTDOWN
+					// shutdown is initiated by the measurement task which sets a flag, powers down the ADXL345 and terminates.
+					// On receipt of the flag the BLEcomms task shuts down:
+					// the BLE transceiver, the measurement task and finally the esp32
+					if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for timeBeforeSleep msec
+					{
+						#if TEST_PORT
+						digitalWrite(signalPin, LOW); // ensure output ports released before deep sleep
+						pinMode(signalPin, INPUT);
+						pinMode(gndPin, INPUT);
+						#endif
+						#if USE_SER
+						Serial.println("Shutting down ADXL measurement task");
+						#endif
+						shutDown = true;
+						vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
+						while(true) {}; // do nothing while waiting for task to end
+					}
+					#endif
+				}
+				a8Ride = sqrtf(sumRide * tickPeriod / time0);
+				a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE); // the result is in mm^s-2
+				newDataADXL = true; // flag to BLE comms task that new data are ready
+				sum = 0;
+				maxAhvSquared = 0;
+				#if USE_SER
+				sprintf(data, "Time = %i, ahvRMS = %e, a8Ride = %e\n", millis(), ahvRMS, a8Ride);
+				Serial.print(data);
+				#endif
+			}
+
+			if (count > nextADC)
+			{
+				// measure battery voltage
+				// probably need an average
+				batteryVoltage = 0;
+				for (uint16_t i = 0; i < 64; i++ )
+				{
+					batteryVoltage += (uint32_t)readADC();
+				}
+				nextADC = count + nMeasureADC;
+				newDataADC = true;
+				batteryVoltage *= 163L;
+				batteryVoltage >>= 12L;
+				batteryVoltage += 320L;
+				// from calibration
+				#if USE_SER
+				sprintf(data, "\nBattery = %i V\n", batteryVoltage);
+				Serial.print(data);
+				#endif
+			}
+
+			//if ((count % 3000) == 0)
+			//{
+			//tasksStatus();
+			//}
+			// not in pre-compiled Esp32-Arduino library
 
 
-  xSemaphoreTake(timerSemaphore, 0);
-  while (xSemaphoreTake(timerSemaphore, 0) == pdFALSE) {;;} // wait for semaphore
-  for (;;) {// wait til tick
-    if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
-    
-    #if TEST_PORT
-    digitalWrite(signalPin, HIGH);
-    #endif
-    uint8_t lastValue = (uint8_t)(count % 3); // index on filteredValues which is a cyclic buffer
-    #if SIMULATE
-    calcAcc(count, (int16_t *)buff);
-    #else
-    adxl.readAcc((int16_t *)buff);
-    #endif //simulate
-    calibrate(calibrationCoeffs, filteredValues, (int16_t *)buff, lastValue);
-    if (count < 2) {
-      for (uint8_t j = 0; j < 3; j++) {
-        for (uint8_t k = 1; k < 4; k++) {
-          filteredValues[j][count][k] = filteredValues[j][count][0];
-        }
-      }
-      } else {
-      applyFilter(filterCoeffs, filteredValues, lastValue);
-    }
-    ++count;
-    
-    // calculate rms values and ahvSquared
-    
-    // omit first few readings to allow infinite impulse filter to settle
-    if (count > nOmit)
-    {
-      double result = 0; // temporary result to allow calculation of maximum ahv
-      for (uint8_t i = 0; i < 3; i++) {
-        result += (filteredValues[i][lastValue][3] * filteredValues[i][lastValue][3]);
-      }
-      sum += result;
-      // measure max
-      if (maxAhvSquared < result)
-      {
-        maxAhvSquared = result;
-      }
-      
-    }
 
-    if (count > nextCount)
-    {
-      nextCount = count + nMeasureADXL;
-      // calculate contribution to daily exposure according to ISO5349
-      ahvRMS = sqrtf(sum / (double)nMeasureADXL); // root mean square
-      if (ahvRMS > 0.06)
-      {
-        sumRide += sum; // sum ahvi^2 for whole ride
-        ahvInteger = uint16_t(ahvRMS * BPM_CENTIMETRE + 0.5); //cm^-2; 0.5 is for rounding
-        ahvIntegerScaled = uint16_t(ahvRMS * RR_CENTIMETRE + 0.5); //cm^-2
-        maxAhvInteger = uint16_t(sqrtf(maxAhvSquared) * RR_CENTIMETRE + 0.5);
-        lastTimeNonZero = count;
-      }
-      else // consider the measurement is noise
-      {
-        ahvInteger = 0;
-        ahvIntegerScaled = 0;
-        maxAhvInteger = 0;
-        #if SHUTDOWN
-        // shutdown is initiated by the measurement task which sets a flag, powers down the ADXL345 and terminates.  
-        // On receipt of the flag the BLEcomms task shuts down:
-        // the BLE transceiver, the measurement task and finally the esp32
-        if ((count - lastTimeNonZero) > timeBeforeSleep) // shutdown if there is no movement for timeBeforeSleep msec
-        {
-          #if TEST_PORT
-          digitalWrite(signalPin, LOW); // ensure output ports released before deep sleep
-          pinMode(signalPin, INPUT);
-          pinMode(gndPin, INPUT);
-          #endif
-          #if USE_SER
-          Serial.println("Shutting down ADXL measurement task");
-          #endif
-          shutDown = true;
-          vTaskDelete(NULL);     //Delete own task by passing NULL(task handle can also be used)
-          while(true) {}; // do nothing while waiting for task to end
-        }
-        #endif
-      }
-      a8Ride = sqrtf(sumRide * tickPeriod / time0);
-      a8RideInteger = uint16_t(a8Ride * RR_MILLIMETRE); // the result is in mm^s-2
-      newDataADXL = true; // flag to BLE comms task that new data are ready
-      sum = 0;
-      maxAhvSquared = 0;
-      #if USE_SER
-      sprintf(data, "Time = %i, ahvRMS = %e, a8Ride = %e\n", millis(), ahvRMS, a8Ride);
-      Serial.print(data);
-      #endif
-    }
+			#if TEST_PORT
+			digitalWrite(signalPin, LOW);
+			#endif
 
-    if (count > nextADC)
-    {
-      // measure battery voltage
-      // probably need an average
-      batteryVoltage = 0;
-      for (uint16_t i = 0; i < 64; i++ )
-      {
-        batteryVoltage += (uint32_t)readADC();
-      }
-      nextADC = count + nMeasureADC;
-      newDataADC = true;
-      batteryVoltage *= 163L;
-      batteryVoltage >>= 12L;
-      batteryVoltage += 320L;
-      // from calibration
-      #if USE_SER
-      sprintf(data, "\nBattery = %i V\n", batteryVoltage);
-      Serial.print(data);
-      #endif
-    }
-
-	if ((count % 3000) == 0)
-	{
-		tasksStatus();
-	}
-
-
-
-
-    #if TEST_PORT
-    digitalWrite(signalPin, LOW);
-    #endif
-
-    }  // end of if semaphore
-	delayMicroseconds(10);
-  }  // end of main for loop
+		}  // end of if semaphore
+		delayMicroseconds(10);
+	}  // end of main for loop
 }  // end of measureVibration task
 
 ////////////////////////////////////// BLEComms //////////////////////////////////////////
